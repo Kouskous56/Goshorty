@@ -64,8 +64,6 @@ func main() {
 		log.Fatalf("Failed to load embedded static files: %v", err)
 	}
 	router.StaticFS("/static", http.FS(staticFS))
-	router.StaticFileFS("/", "index.html", http.FS(staticFS))
-	router.StaticFileFS("/index.html", "index.html", http.FS(staticFS))
 
 	// Health check (no auth required)
 	router.GET("/health", h.Health)
@@ -138,6 +136,17 @@ func main() {
 		})
 	})
 
+	// Serve index.html for all other routes (SPA fallback)
+	router.NoRoute(func(c *gin.Context) {
+		// For API requests, return 404
+		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
+			c.JSON(404, gin.H{"error": "Not found"})
+			return
+		}
+		// For other routes, serve index.html (SPA)
+		c.FileFromFS("/", http.FS(staticFS), "index.html")
+	})
+
 	// Start server
 	addr := cfg.Server.Port
 	srv := &http.Server{
@@ -199,3 +208,4 @@ func corsMiddleware() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
