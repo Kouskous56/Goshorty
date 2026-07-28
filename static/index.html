@@ -455,8 +455,8 @@
 <body>
     <!-- Login Section -->
     <div id="authSection" class="auth-section">
-        <div id="errorMsg" class="error"></div>
-        <div id="successMsg" class="success"></div>
+        <div id="authErrorMsg" class="error"></div>
+        <div id="authSuccessMsg" class="success"></div>
 
         <!-- Login Form -->
         <div id="loginForm">
@@ -508,6 +508,9 @@
                 <button class="btn-logout" onclick="handleLogout()">Logout</button>
             </div>
         </div>
+
+        <div id="dashErrorMsg" class="error" style="margin:20px 30px 0"></div>
+        <div id="dashSuccessMsg" class="success" style="margin:0 30px 20px"></div>
 
         <div class="tabs">
             <button class="tab-button active" onclick="switchTab(event, 'shortenTab')">
@@ -652,7 +655,8 @@
         }
 
         function showError(message) {
-            const errorDiv = document.getElementById('errorMsg');
+            const isAuth = document.getElementById('authSection').style.display !== 'none';
+            const errorDiv = document.getElementById(isAuth ? 'authErrorMsg' : 'dashErrorMsg');
             errorDiv.textContent = message;
             errorDiv.style.display = 'block';
             setTimeout(() => {
@@ -661,7 +665,8 @@
         }
 
         function showSuccess(message) {
-            const successDiv = document.getElementById('successMsg');
+            const isAuth = document.getElementById('authSection').style.display !== 'none';
+            const successDiv = document.getElementById(isAuth ? 'authSuccessMsg' : 'dashSuccessMsg');
             successDiv.textContent = message;
             successDiv.style.display = 'block';
             setTimeout(() => {
@@ -747,6 +752,11 @@
             }
 
             currentUser = JSON.parse(localStorage.getItem('user'));
+            if (!currentUser) {
+                showError('Session expired, please login again');
+                handleLogout();
+                return;
+            }
             document.getElementById('authSection').style.display = 'none';
             document.getElementById('dashboardSection').classList.add('active');
             document.getElementById('currentUser').textContent = currentUser.username;
