@@ -9,7 +9,8 @@ A production-ready URL shortener service built with Go, featuring automatic expi
 - ✅ Custom short codes (optional)
 - ✅ Visit tracking and analytics
 - ✅ RESTful API
-- ✅ In-memory storage with automatic cleanup
+- ✅ PostgreSQL persistence in production
+- ✅ In-memory storage fallback for local development
 - ✅ CORS enabled
 - ✅ Production-ready error handling
 
@@ -27,7 +28,10 @@ GoShorty/
 ├── handlers/
 │   └── handler.go        # HTTP request handlers
 ├── storage/
-│   └── storage.go        # In-memory storage with TTL
+│   ├── interfaces.go     # Repository contracts
+│   ├── storage.go        # In-memory development storage
+│   ├── postgres.go       # PostgreSQL production storage
+│   └── migrations/       # Embedded database migrations
 ├── utils/
 │   └── random.go         # Utility functions
 ├── go.mod                # Go module file
@@ -52,9 +56,14 @@ cd GoShorty
 go mod download
 ```
 
-3. Run the application:
+3. Set a development signing key and run the application:
 ```bash
-go run main.go
+# PowerShell
+$env:SECRET_KEY="development-secret-change-me"
+go run .
+
+# Linux/macOS
+SECRET_KEY="development-secret-change-me" go run .
 ```
 
 The server will start on `http://localhost:8080`
@@ -220,9 +229,11 @@ console.log(data.short_url);
 
 ### Storage
 
-- **In-Memory Storage:** URLs are stored in a thread-safe Go map
-- **Automatic Cleanup:** Background goroutine removes expired entries every 30 seconds
-- **TTL Enforcement:** Automatic expiration without external dependencies
+- **Production:** PostgreSQL selected through `DATABASE_URL`
+- **Development:** Thread-safe in-memory fallback when not in release mode
+- **Migrations:** Embedded, versioned SQL migrations run automatically at startup
+- **Consistency:** Unique short-code constraint, transactional admin invariants, atomic visit counters
+- **Cleanup:** Expired URLs are removed in bounded background batches
 
 ### Concurrency
 
@@ -232,9 +243,9 @@ console.log(data.short_url);
 
 ### Performance
 
-- O(1) lookup time
-- Minimal memory footprint
-- Efficient cleanup process
+- Indexed short-code and expiry lookups
+- PostgreSQL connection pooling through pgx
+- Horizontal instances share the same persistent data
 
 ## Architecture
 
@@ -252,9 +263,9 @@ Request → Router → Handler → Service → Storage
 ## Future Enhancements
 
 - [ ] Redis backend support for distributed deployments
-- [ ] Database persistence (PostgreSQL)
-- [ ] User authentication and API keys
-- [ ] Analytics dashboard
+- [x] Database persistence (PostgreSQL)
+- [x] User authentication and role-based access
+- [x] Analytics dashboard
 - [ ] Batch URL shortening
 - [ ] QR code generation
 - [ ] URL preview feature
@@ -284,10 +295,16 @@ go test ./...
 
 ## Configuration
 
-Edit `config/config.go` to modify:
-- Server port and host
-- TTL options and defaults
-- Base URL for short links
+Production configuration is provided through environment variables:
+
+- `SECRET_KEY` — required token signing key.
+- `ADMIN_PASSWORD` — required in release mode.
+- `DATABASE_URL` — required in release mode.
+- `PUBLIC_BASE_URL` — canonical public origin for short links.
+- `ADMIN_EMAIL` — optional bootstrap admin email.
+- `TOKEN_TTL` — optional token lifetime, default `24h`.
+- `PORT` — listening port; Railway supplies this automatically.
+- `GIN_MODE=release` — enables production mode.
 
 ## Error Handling
 

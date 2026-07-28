@@ -3,13 +3,13 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"testing"
+	"github.com/gin-gonic/gin"
 	"goshorty/models"
 	"goshorty/services"
 	"goshorty/storage"
-	"github.com/gin-gonic/gin"
+	"net/http"
+	"net/http/httptest"
+	"testing"
 )
 
 func setupAuthTest() (*gin.Engine, *storage.UserStorage, *services.TokenService) {
@@ -137,8 +137,8 @@ func TestRegister_Duplicate(t *testing.T) {
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusBadRequest {
-		t.Errorf("Duplicate registration should return 400, got %d", w2.Code)
+	if w2.Code != http.StatusConflict {
+		t.Errorf("Duplicate registration should return 409, got %d", w2.Code)
 	}
 }
 
@@ -262,8 +262,9 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 }
 
 func TestAdminMiddleware_Forbidden(t *testing.T) {
-	router, _, ts := setupAuthTest()
-	token := tokenFor(t, ts, "user1", "regular", models.RoleUser)
+	router, us, ts := setupAuthTest()
+	user, _ := us.CreateUser("regular", "password123", "regular@test.com")
+	token := tokenFor(t, ts, user.ID, user.Username, models.RoleUser)
 
 	req, _ := http.NewRequest("GET", "/api/auth/users", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -395,5 +396,68 @@ func TestDeleteUser_NotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("Expected 404, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddlewareRejectsDeletedUserToken(t *testing.T) {
+	router, us, ts := setupAuthTest()
+	user, _ := us.CreateUser("deleted-session", "password123", "deleted@test.com")
+	token := tokenFor(t, ts, user.ID, user.Username, user.Role)
+	if err := us.DeleteUser(user.Username); err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest("GET", "/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected deleted user's token to return 401, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddlewareUsesCurrentRole(t *testing.T) {
+	router, us, ts := setupAuthTest()
+	user, _ := us.CreateUser("role-session", "password123", "role@test.com")
+	if err := us.UpdateUserRole(user.Username, models.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	token := tokenFor(t, ts, user.ID, user.Username, models.RoleAdmin)
+	if err := us.UpdateUserRole(user.Username, models.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest("GET", "/api/auth/users", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected stale admin token to return 403, got %d", w.Code)
+	}
+}
+
+func TestCannotRemoveLastAdminThroughAPI(t *testing.T) {
+	router, us, ts := setupAuthTest()
+	admin, _ := us.GetUser("admin")
+	token := tokenFor(t, ts, admin.ID, admin.Username, admin.Role)
+
+	body, _ := json.Marshal(map[string]string{"role": models.RoleUser})
+	roleReq, _ := http.NewRequest("PUT", "/api/auth/users/admin/role", bytes.NewBuffer(body))
+	roleReq.Header.Set("Content-Type", "application/json")
+	roleReq.Header.Set("Authorization", "Bearer "+token)
+	roleW := httptest.NewRecorder()
+	router.ServeHTTP(roleW, roleReq)
+	if roleW.Code != http.StatusConflict {
+		t.Fatalf("expected final admin demotion to return 409, got %d", roleW.Code)
+	}
+
+	deleteReq, _ := http.NewRequest("DELETE", "/api/auth/users/admin", nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+token)
+	deleteW := httptest.NewRecorder()
+	router.ServeHTTP(deleteW, deleteReq)
+	if deleteW.Code != http.StatusConflict {
+		t.Fatalf("expected final admin deletion to return 409, got %d", deleteW.Code)
 	}
 }

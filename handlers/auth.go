@@ -1,22 +1,24 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 	"goshorty/models"
 	"goshorty/services"
 	"goshorty/storage"
-	"github.com/gin-gonic/gin"
 )
 
 // AuthHandler handles authentication
 type AuthHandler struct {
-	userStorage    *storage.UserStorage
-	tokenService   *services.TokenService
+	userStorage  storage.UserStore
+	tokenService *services.TokenService
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(userStorage *storage.UserStorage, tokenService *services.TokenService) *AuthHandler {
+func NewAuthHandler(userStorage storage.UserStore, tokenService *services.TokenService) *AuthHandler {
 	return &AuthHandler{
 		userStorage:  userStorage,
 		tokenService: tokenService,
@@ -28,19 +30,17 @@ func (ah *AuthHandler) Register(c *gin.Context) {
 	var req models.RegisterRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Message: "Invalid request: " + err.Error(),
-			Code:    "INVALID_REQUEST",
-		})
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid")
 		return
 	}
 
 	user, err := ah.userStorage.CreateUser(req.Username, req.Password, req.Email)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Message: "Registration failed",
-			Code:    "REGISTRATION_FAILED",
-		})
+		if errors.Is(err, storage.ErrUsernameExists) {
+			writeError(c, http.StatusConflict, "USERNAME_TAKEN", "Username is already registered")
+			return
+		}
+		writeError(c, http.StatusInternalServerError, "REGISTRATION_FAILED", "Registration failed")
 		return
 	}
 
@@ -65,16 +65,21 @@ func (ah *AuthHandler) Login(c *gin.Context) {
 	var req models.LoginRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Message: "Invalid request: " + err.Error(),
-			Code:    "INVALID_REQUEST",
-		})
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid")
 		return
 	}
 
 	// Verify password
 	valid, err := ah.userStorage.VerifyPassword(req.Username, req.Password)
-	if err != nil || !valid {
+	if err != nil {
+		if !errors.Is(err, storage.ErrUserNotFound) {
+			writeError(c, http.StatusInternalServerError, "AUTH_FAILED", "Authentication service unavailable")
+			return
+		}
+		writeError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid credentials")
+		return
+	}
+	if !valid {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Message: "Invalid credentials",
 			Code:    "INVALID_CREDENTIALS",
@@ -109,7 +114,11 @@ func (ah *AuthHandler) Login(c *gin.Context) {
 
 // GetAllUsers returns all users (admin only)
 func (ah *AuthHandler) GetAllUsers(c *gin.Context) {
-	users := ah.userStorage.GetAllUsers()
+	users, err := ah.userStorage.GetAllUsers()
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list users")
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"users": users,
 	})
@@ -121,26 +130,29 @@ func (ah *AuthHandler) UpdateUserRole(c *gin.Context) {
 	var req map[string]string
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Message: "Invalid request: " + err.Error(),
-			Code:    "INVALID_REQUEST",
-		})
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid")
 		return
 	}
 
 	role := req["role"]
 	if err := ah.userStorage.UpdateUserRole(username, role); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Message: "Failed to update user role",
-			Code:    "UPDATE_FAILED",
-		})
+		switch {
+		case errors.Is(err, storage.ErrUserNotFound):
+			writeError(c, http.StatusNotFound, "USER_NOT_FOUND", "User not found")
+		case errors.Is(err, storage.ErrInvalidRole):
+			writeError(c, http.StatusBadRequest, "INVALID_ROLE", "Role must be admin or user")
+		case errors.Is(err, storage.ErrLastAdmin):
+			writeError(c, http.StatusConflict, "LAST_ADMIN", "The last admin cannot be demoted")
+		default:
+			writeError(c, http.StatusInternalServerError, "UPDATE_FAILED", "Failed to update user role")
+		}
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "User role updated",
+		"message":  "User role updated",
 		"username": username,
-		"role": role,
+		"role":     role,
 	})
 }
 
@@ -149,15 +161,19 @@ func (ah *AuthHandler) DeleteUser(c *gin.Context) {
 	username := c.Param("username")
 
 	if err := ah.userStorage.DeleteUser(username); err != nil {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{
-			Message: "User not found",
-			Code:    "NOT_FOUND",
-		})
+		switch {
+		case errors.Is(err, storage.ErrUserNotFound):
+			writeError(c, http.StatusNotFound, "USER_NOT_FOUND", "User not found")
+		case errors.Is(err, storage.ErrLastAdmin):
+			writeError(c, http.StatusConflict, "LAST_ADMIN", "The last admin cannot be deleted")
+		default:
+			writeError(c, http.StatusInternalServerError, "DELETE_FAILED", "Failed to delete user")
+		}
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "User deleted",
+		"message":  "User deleted",
 		"username": username,
 	})
 }
@@ -200,10 +216,22 @@ func (ah *AuthHandler) AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Store user info in context
-		c.Set("user_id", claims.UserID)
-		c.Set("username", claims.Username)
-		c.Set("role", claims.Role)
+		// Resolve the current user on every request so deletion and role changes
+		// take effect immediately instead of waiting for the token to expire.
+		user, err := ah.userStorage.GetUserByID(claims.UserID)
+		if err != nil {
+			if errors.Is(err, storage.ErrUserNotFound) {
+				writeError(c, http.StatusUnauthorized, "INVALID_TOKEN", "Invalid or expired token")
+			} else {
+				writeError(c, http.StatusInternalServerError, "AUTH_FAILED", "Authentication service unavailable")
+			}
+			c.Abort()
+			return
+		}
+
+		c.Set("user_id", user.ID)
+		c.Set("username", user.Username)
+		c.Set("role", user.Role)
 
 		c.Next()
 	}
@@ -233,16 +261,17 @@ func (ah *AuthHandler) GetCurrentUser(c *gin.Context) {
 
 	user, err := ah.userStorage.GetUserByID(c.GetString("user_id"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{
-			Message: "User not found",
-			Code:    "USER_NOT_FOUND",
-		})
+		if errors.Is(err, storage.ErrUserNotFound) {
+			writeError(c, http.StatusNotFound, "USER_NOT_FOUND", "User not found")
+		} else {
+			writeError(c, http.StatusInternalServerError, "USER_LOOKUP_FAILED", "Failed to load current user")
+		}
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"user": user,
-		"role": role,
+		"user":     user,
+		"role":     role,
 		"username": username,
 	})
 }

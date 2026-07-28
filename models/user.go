@@ -25,9 +25,9 @@ type LoginRequest struct {
 
 // LoginResponse is the login response
 type LoginResponse struct {
-	Token    string `json:"token"`
-	User     *User  `json:"user"`
-	Message  string `json:"message"`
+	Token   string `json:"token"`
+	User    *User  `json:"user"`
+	Message string `json:"message"`
 }
 
 // RegisterRequest is the registration request
@@ -36,4 +36,3 @@ type RegisterRequest struct {
 	Password string `json:"password" binding:"required,min=6"`
 	Email    string `json:"email" binding:"required,email"`
 }
-

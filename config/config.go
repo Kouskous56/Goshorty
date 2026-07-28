@@ -1,20 +1,30 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
 // Config holds application configuration
 type Config struct {
-	Server ServerConfig
-	TTL    TTLConfig
+	Server   ServerConfig
+	Database DatabaseConfig
+	TTL      TTLConfig
 }
 
 // ServerConfig holds server settings
 type ServerConfig struct {
 	Port    string
 	BaseURL string // e.g., "http://localhost:8080"
+}
+
+// DatabaseConfig holds persistent storage settings.
+type DatabaseConfig struct {
+	URL string
 }
 
 // TTLConfig holds TTL duration settings
@@ -30,13 +40,17 @@ func portFromEnv(defaultPort string) string {
 }
 
 func baseURLFromEnv(defaultURL string) string {
+	if u := os.Getenv("PUBLIC_BASE_URL"); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	// BASE_URL remains supported for backward compatibility.
 	if u := os.Getenv("BASE_URL"); u != "" {
-		return u
+		return strings.TrimRight(u, "/")
 	}
 	if p := os.Getenv("PORT"); p != "" {
 		return "http://localhost:" + p
 	}
-	return defaultURL
+	return strings.TrimRight(defaultURL, "/")
 }
 
 // NewConfig creates a new configuration with default values
@@ -45,6 +59,9 @@ func NewConfig() *Config {
 		Server: ServerConfig{
 			Port:    portFromEnv(":8080"),
 			BaseURL: baseURLFromEnv("http://localhost:8080"),
+		},
+		Database: DatabaseConfig{
+			URL: os.Getenv("DATABASE_URL"),
 		},
 		TTL: TTLConfig{
 			Options: map[string]time.Duration{
@@ -56,4 +73,19 @@ func NewConfig() *Config {
 			},
 		},
 	}
+}
+
+// Validate verifies configuration values that affect externally visible URLs.
+func (c *Config) Validate() error {
+	if c == nil {
+		return errors.New("config is nil")
+	}
+	publicURL, err := url.Parse(c.Server.BaseURL)
+	if err != nil || publicURL.Host == "" {
+		return fmt.Errorf("PUBLIC_BASE_URL must be an absolute URL")
+	}
+	if publicURL.Scheme != "http" && publicURL.Scheme != "https" {
+		return fmt.Errorf("PUBLIC_BASE_URL must use http or https")
+	}
+	return nil
 }

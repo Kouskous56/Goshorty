@@ -10,11 +10,12 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/gin-gonic/gin"
 	"goshorty/config"
 	"goshorty/handlers"
 	"goshorty/services"
 	"goshorty/storage"
-	"github.com/gin-gonic/gin"
 )
 
 //go:embed static/*
@@ -23,6 +24,9 @@ var staticFiles embed.FS
 func main() {
 	// Load configuration
 	cfg := config.NewConfig()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
 
 	// Validate required environment variables
 	secretKey := os.Getenv("SECRET_KEY")
@@ -35,17 +39,58 @@ func main() {
 		services.TokenTTL = ttl
 	}
 
-	// Initialize storage
-	store := storage.NewStorage()
-	adminPassword := getEnv("ADMIN_PASSWORD", "admin123")
+	adminPassword := os.Getenv("ADMIN_PASSWORD")
+	if adminPassword == "" {
+		if gin.Mode() == gin.ReleaseMode {
+			log.Fatal("ADMIN_PASSWORD environment variable is required in release mode")
+		}
+		adminPassword = "admin123"
+		log.Println("WARNING: using insecure default ADMIN_PASSWORD for development only")
+	}
 	adminEmail := getEnv("ADMIN_EMAIL", "admin@goshorty.local")
-	userStorage, err := storage.NewUserStorage(adminPassword, adminEmail)
-	if err != nil {
-		log.Fatalf("Failed to initialize user storage: %v", err)
+
+	// Initialize persistence. Production requires PostgreSQL; local development
+	// may use the in-memory implementation for a zero-setup workflow.
+	var urlStorage storage.URLStore
+	var userStorage storage.UserStore
+	var closeStorage func()
+
+	if cfg.Database.URL != "" {
+		dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		postgresStore, err := storage.NewPostgresStore(dbCtx, cfg.Database.URL, adminPassword, adminEmail)
+		dbCancel()
+		if err != nil {
+			log.Fatalf("Failed to initialize PostgreSQL storage: %v", err)
+		}
+
+		cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
+		go postgresStore.RunCleanup(cleanupCtx, time.Minute, 500)
+
+		urlStorage = postgresStore
+		userStorage = postgresStore
+		closeStorage = func() {
+			cleanupCancel()
+			postgresStore.Close()
+		}
+		log.Println("Using PostgreSQL persistent storage")
+	} else {
+		if gin.Mode() == gin.ReleaseMode {
+			log.Fatal("DATABASE_URL environment variable is required in release mode")
+		}
+
+		memoryURLs := storage.NewStorage()
+		memoryUsers, err := storage.NewUserStorage(adminPassword, adminEmail)
+		if err != nil {
+			log.Fatalf("Failed to initialize in-memory user storage: %v", err)
+		}
+		urlStorage = memoryURLs
+		userStorage = memoryUsers
+		closeStorage = memoryURLs.Stop
+		log.Println("WARNING: using non-persistent in-memory storage for development only")
 	}
 
 	// Initialize services
-	urlService := services.NewURLService(store, cfg)
+	urlService := services.NewURLService(urlStorage, cfg)
 	tokenService := services.NewTokenService(secretKey)
 
 	// Initialize handlers
@@ -119,19 +164,19 @@ func main() {
 			},
 			"frontend": "/",
 			"endpoints": gin.H{
-				"GET /health": "Health check",
-				"GET /goshorty/:timeout/:code": "Redirect to original URL",
-				"POST /api/auth/login": "Login user",
-				"POST /api/auth/register": "Register new user",
-				"GET /api/auth/me": "Current user info",
-				"POST /api/shorten": "Create short URL",
-				"GET /api/shorten/:code": "Get URL info",
-				"DELETE /api/shorten/:code": "Delete URL",
-				"GET /api/shorten/all": "List all URLs",
-				"GET /api/stats": "Get stats",
-				"GET /api/auth/users": "List users (admin)",
+				"GET /health":                        "Health check",
+				"GET /goshorty/:timeout/:code":       "Redirect to original URL",
+				"POST /api/auth/login":               "Login user",
+				"POST /api/auth/register":            "Register new user",
+				"GET /api/auth/me":                   "Current user info",
+				"POST /api/shorten":                  "Create short URL",
+				"GET /api/shorten/:code":             "Get URL info",
+				"DELETE /api/shorten/:code":          "Delete URL",
+				"GET /api/shorten/all":               "List all URLs",
+				"GET /api/stats":                     "Get stats",
+				"GET /api/auth/users":                "List users (admin)",
 				"PUT /api/auth/users/:username/role": "Update user role (admin)",
-				"DELETE /api/auth/users/:username": "Delete user (admin)",
+				"DELETE /api/auth/users/:username":   "Delete user (admin)",
 			},
 		})
 	})
@@ -173,9 +218,6 @@ func main() {
 	sig := <-quit
 	log.Printf("Received signal: %v, shutting down...", sig)
 
-	// Stop cleanup goroutine
-	store.Stop()
-
 	// Graceful shutdown with 5s timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -184,6 +226,7 @@ func main() {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
+	closeStorage()
 	log.Println("Server exited cleanly")
 }
 
@@ -210,4 +253,3 @@ func corsMiddleware() gin.HandlerFunc {
 		c.Next()
 	}
 }
-

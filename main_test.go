@@ -3,16 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-	"time"
+	"github.com/gin-gonic/gin"
 	"goshorty/config"
 	"goshorty/handlers"
 	"goshorty/models"
 	"goshorty/services"
 	"goshorty/storage"
-	"github.com/gin-gonic/gin"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
 )
 
 // TestCreateShortURL tests URL shortening functionality
@@ -156,7 +156,7 @@ func TestVisitTracking(t *testing.T) {
 	}
 
 	// Check visit count
-	urlInfo, _ := service.GetURLInfo(response.ShortCode)
+	urlInfo, _ := service.GetURLInfo(response.ShortCode, "test-user", models.RoleUser)
 	if urlInfo.Visits != 5 {
 		t.Errorf("Expected 5 visits, got %d", urlInfo.Visits)
 	}
@@ -207,7 +207,10 @@ func TestStatistics(t *testing.T) {
 		service.CreateShortURL(request, "test-user")
 	}
 
-	stats := service.GetStats()
+	stats, err := service.GetStats("test-user", models.RoleUser)
+	if err != nil {
+		t.Fatalf("Failed to load stats: %v", err)
+	}
 	if stats["total_urls"] != 3 {
 		t.Errorf("Expected 3 URLs, got %v", stats["total_urls"])
 	}

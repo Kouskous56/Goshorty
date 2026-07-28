@@ -71,8 +71,9 @@ graph LR
     A[Dashboard] --> B[Variables tab]
     B --> C[SECRET_KEY]
     B --> D[ADMIN_PASSWORD]
-    B --> E[BASE_URL]
+    B --> E[PUBLIC_BASE_URL]
     B --> F[GIN_MODE=release]
+    B --> G[DATABASE_URL]
 ```
 
 **Bước 3.1** — Set environment variables
@@ -81,8 +82,9 @@ graph LR
 |----------|----------|-------|
 | `SECRET_KEY` | ✅ **YES** | Generate: `openssl rand -hex 32` |
 | `ADMIN_PASSWORD` | ✅ **YES** | Mật khẩu mạnh |
+| `DATABASE_URL` | ✅ **YES** | Railway PostgreSQL service reference |
 | `ADMIN_EMAIL` | No | `admin@yourdomain.com` |
-| `BASE_URL` | No | Railway cấp domain tự động |
+| `PUBLIC_BASE_URL` | ✅ **YES** | Domain HTTPS do Railway cấp, ví dụ `https://goshorty.up.railway.app` |
 | `TOKEN_TTL` | No | `24h` (mặc định) |
 | `GIN_MODE` | No | `release` (để tắt debug) |
 
@@ -108,12 +110,12 @@ openssl rand -hex 32
 - Mở trình duyệt → kiểm tra login
 - Test: `GET https://goshorty.up.railway.app/health`
 
-**Bước 4.2** — Update BASE_URL (nếu cần)
+**Bước 4.2** — Set PUBLIC_BASE_URL
 ```bash
-railway env set BASE_URL=https://goshorty.up.railway.app
+railway env set PUBLIC_BASE_URL=https://goshorty.up.railway.app
 ```
 
-**Bước 4.3** — Redeploy (sau khi set BASE_URL)
+**Bước 4.3** — Redeploy (sau khi set PUBLIC_BASE_URL)
 - Railway tự động redeploy khi env thay đổi
 
 ---
@@ -123,9 +125,11 @@ railway env set BASE_URL=https://goshorty.up.railway.app
 | Variable | Mặc định | Production |
 |----------|----------|------------|
 | `SECRET_KEY` | **required** | `openssl rand -hex 64` |
-| `ADMIN_PASSWORD` | `admin123` | Phức tạp, 12+ ký tự |
+| `ADMIN_PASSWORD` | `admin123` chỉ ở debug | **Bắt buộc** khi `GIN_MODE=release`, dùng 12+ ký tự |
+| `DATABASE_URL` | in-memory ở debug | **Bắt buộc** khi `GIN_MODE=release`; lấy từ Railway PostgreSQL |
 | `ADMIN_EMAIL` | `admin@goshorty.local` | Email thật |
-| `BASE_URL` | `http://localhost:8080` | `https://goshorty.up.railway.app` |
+| `PUBLIC_BASE_URL` | `http://localhost:8080` | **Bắt buộc**, ví dụ `https://goshorty.up.railway.app` |
+| `BASE_URL` | — | Chỉ giữ để tương thích; `PUBLIC_BASE_URL` được ưu tiên |
 | `PORT` | `8080` | Railway tự set |
 | `TOKEN_TTL` | `24h` | Giữ nguyên |
 | `GIN_MODE` | debug | `release` |
@@ -152,6 +156,7 @@ railway up
 # Set env vars
 railway env set SECRET_KEY="your-secret-key"
 railway env set ADMIN_PASSWORD="your-admin-password"
+railway env set PUBLIC_BASE_URL="https://goshorty.up.railway.app"
 railway env set GIN_MODE=release
 
 # Open in browser
@@ -160,6 +165,10 @@ railway open
 # View logs
 railway logs
 ```
+
+Trước khi deploy release, thêm một PostgreSQL service trong cùng Railway project
+và tham chiếu biến `DATABASE_URL` của service đó vào GoShorty. Ứng dụng tự chạy
+các migration còn thiếu khi khởi động; không cần chạy SQL thủ công.
 
 ---
 

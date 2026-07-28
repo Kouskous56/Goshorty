@@ -5,15 +5,25 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 	"goshorty/models"
 	"goshorty/utils"
-	"golang.org/x/crypto/bcrypt"
 )
 
 const defaultAdmin = "admin"
 
 // ErrUserNotFound is returned when a user lookup fails
 var ErrUserNotFound = errors.New("user not found")
+
+// ErrUsernameExists is returned when a username is already registered.
+var ErrUsernameExists = errors.New("username already exists")
+
+// ErrInvalidRole is returned when a role is not supported.
+var ErrInvalidRole = errors.New("invalid role")
+
+// ErrLastAdmin is returned when an operation would remove the final admin.
+var ErrLastAdmin = errors.New("cannot remove the last admin")
 
 // UserStorage manages user data
 type UserStorage struct {
@@ -56,7 +66,7 @@ func (us *UserStorage) CreateUser(username, password, email string) (*models.Use
 
 	// Check if user exists
 	if _, exists := us.users[username]; exists {
-		return nil, errors.New("username already exists")
+		return nil, ErrUsernameExists
 	}
 
 	passHash, err := hashPassword(password)
@@ -76,7 +86,7 @@ func (us *UserStorage) CreateUser(username, password, email string) (*models.Use
 	us.users[username] = user
 	us.byID[user.ID] = user
 
-	return user, nil
+	return cloneUser(user), nil
 }
 
 // GetUser retrieves a user by username
@@ -89,7 +99,7 @@ func (us *UserStorage) GetUser(username string) (*models.User, error) {
 		return nil, ErrUserNotFound
 	}
 
-	return user, nil
+	return cloneUser(user), nil
 }
 
 // GetUserByID retrieves a user by ID
@@ -102,7 +112,7 @@ func (us *UserStorage) GetUserByID(id string) (*models.User, error) {
 		return nil, ErrUserNotFound
 	}
 
-	return user, nil
+	return cloneUser(user), nil
 }
 
 // VerifyPassword checks if password matches using bcrypt
@@ -129,7 +139,11 @@ func (us *UserStorage) UpdateUserRole(username, role string) error {
 	}
 
 	if role != models.RoleAdmin && role != models.RoleUser {
-		return errors.New("invalid role")
+		return ErrInvalidRole
+	}
+
+	if user.Role == models.RoleAdmin && role != models.RoleAdmin && us.adminCountLocked() <= 1 {
+		return ErrLastAdmin
 	}
 
 	user.Role = role
@@ -137,16 +151,16 @@ func (us *UserStorage) UpdateUserRole(username, role string) error {
 }
 
 // GetAllUsers returns all users (admin only)
-func (us *UserStorage) GetAllUsers() []*models.User {
+func (us *UserStorage) GetAllUsers() ([]*models.User, error) {
 	us.mu.RLock()
 	defer us.mu.RUnlock()
 
 	users := make([]*models.User, 0, len(us.byID))
 	for _, user := range us.byID {
-		users = append(users, user)
+		users = append(users, cloneUser(user))
 	}
 
-	return users
+	return users, nil
 }
 
 // DeleteUser deletes a user
@@ -157,6 +171,10 @@ func (us *UserStorage) DeleteUser(username string) error {
 	user, exists := us.users[username]
 	if !exists {
 		return ErrUserNotFound
+	}
+
+	if user.Role == models.RoleAdmin && us.adminCountLocked() <= 1 {
+		return ErrLastAdmin
 	}
 
 	delete(us.users, username)
@@ -172,4 +190,22 @@ func hashPassword(password string) (string, error) {
 		return "", err
 	}
 	return string(hash), nil
+}
+
+func (us *UserStorage) adminCountLocked() int {
+	count := 0
+	for _, user := range us.users {
+		if user.Role == models.RoleAdmin {
+			count++
+		}
+	}
+	return count
+}
+
+func cloneUser(user *models.User) *models.User {
+	if user == nil {
+		return nil
+	}
+	cloned := *user
+	return &cloned
 }

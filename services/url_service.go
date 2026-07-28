@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"time"
+
 	"goshorty/config"
 	"goshorty/models"
 	"goshorty/storage"
@@ -17,14 +18,23 @@ const DefaultExpiresIn = "24h"
 // ErrForbidden is returned when a user tries to access a resource they don't own
 var ErrForbidden = errors.New("access denied")
 
+// ErrURLNotFound is returned when a URL does not exist or has expired.
+var ErrURLNotFound = errors.New("URL not found or has expired")
+
+// ErrCodeTaken is returned when a requested short code is already active.
+var ErrCodeTaken = errors.New("short code is already taken")
+
+// ErrInvalidURL is returned when the original URL is invalid.
+var ErrInvalidURL = errors.New("invalid URL")
+
 // URLService handles URL shortening logic
 type URLService struct {
-	storage *storage.Storage
+	storage storage.URLStore
 	config  *config.Config
 }
 
 // NewURLService creates a new URL service
-func NewURLService(st *storage.Storage, cfg *config.Config) *URLService {
+func NewURLService(st storage.URLStore, cfg *config.Config) *URLService {
 	return &URLService{
 		storage: st,
 		config:  cfg,
@@ -35,12 +45,12 @@ func NewURLService(st *storage.Storage, cfg *config.Config) *URLService {
 func (s *URLService) CreateShortURL(req *models.ShortenRequest, userID string) (*models.ShortenResponse, error) {
 	// Validate request
 	if req.URL == "" {
-		return nil, errors.New("URL is required")
+		return nil, fmt.Errorf("%w: URL is required", ErrInvalidURL)
 	}
 
 	u, err := url.Parse(req.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, errors.New("only http and https URLs are allowed")
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("%w: only http and https URLs are allowed", ErrInvalidURL)
 	}
 
 	// Determine TTL duration
@@ -50,53 +60,66 @@ func (s *URLService) CreateShortURL(req *models.ShortenRequest, userID string) (
 		duration = 24 * time.Hour
 	}
 
-	// Generate short code
-	var shortCode string
-	if req.CustomCode != "" {
-		// Check if custom code is available
-		if s.storage.Exists(req.CustomCode) {
-			return nil, fmt.Errorf("custom code '%s' is already taken", req.CustomCode)
-		}
-		shortCode = req.CustomCode
-	} else {
-		// Generate random code and ensure uniqueness
-		shortCode = s.generateUniqueCode()
-	}
-
-	// Create URL data
+	// Build the URL data before reserving a code. SetIfAbsent makes the
+	// availability check and write atomic.
 	now := time.Now()
 	expiresAt := now.Add(duration)
-	
+	expiresInDisplay := req.ExpiresIn
+	if expiresInDisplay == "" {
+		expiresInDisplay = DefaultExpiresIn
+	}
+
 	urlData := &models.URLData{
 		ID:          utils.GenerateID(),
-		ShortCode:   shortCode,
 		OriginalURL: req.URL,
-		ExpiresIn:   req.ExpiresIn,
+		ExpiresIn:   expiresInDisplay,
 		ExpiresAt:   expiresAt,
 		CreatedAt:   now,
 		CreatedBy:   userID,
 		Visits:      0,
 	}
 
-	// Store in storage
-	if err := s.storage.Set(shortCode, urlData); err != nil {
-		return nil, fmt.Errorf("failed to store URL: %w", err)
-	}
-
-	// Build response
-	expiresInDisplay := req.ExpiresIn
-	if expiresInDisplay == "" {
-		expiresInDisplay = DefaultExpiresIn
+	var shortCode string
+	if req.CustomCode != "" {
+		shortCode = req.CustomCode
+		urlData.ShortCode = shortCode
+		if err := s.storage.SetIfAbsent(shortCode, urlData); err != nil {
+			if errors.Is(err, storage.ErrKeyExists) {
+				return nil, fmt.Errorf("%w: %s", ErrCodeTaken, shortCode)
+			}
+			return nil, fmt.Errorf("failed to store URL: %w", err)
+		}
+	} else {
+		const maxAttempts = 100
+		for i := 0; i < maxAttempts; i++ {
+			codeLength := 6
+			if i == maxAttempts-1 {
+				codeLength = 10
+			}
+			shortCode = utils.GenerateShortCode(codeLength)
+			urlData.ShortCode = shortCode
+			err := s.storage.SetIfAbsent(shortCode, urlData)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, storage.ErrKeyExists) {
+				return nil, fmt.Errorf("failed to store URL: %w", err)
+			}
+			shortCode = ""
+		}
+		if shortCode == "" {
+			return nil, errors.New("failed to allocate a unique short code")
+		}
 	}
 
 	response := &models.ShortenResponse{
-		ID:           urlData.ID,
-		ShortURL:     fmt.Sprintf("%s/goshorty/%s/%s", s.config.Server.BaseURL, expiresInDisplay, shortCode),
-		ShortCode:    shortCode,
-		OriginalURL:  req.URL,
-		ExpiresIn:    expiresInDisplay,
-		ExpiresAt:    expiresAt,
-		CreatedAt:    now,
+		ID:          urlData.ID,
+		ShortURL:    fmt.Sprintf("%s/goshorty/%s/%s", s.config.Server.BaseURL, expiresInDisplay, shortCode),
+		ShortCode:   shortCode,
+		OriginalURL: req.URL,
+		ExpiresIn:   expiresInDisplay,
+		ExpiresAt:   expiresAt,
+		CreatedAt:   now,
 	}
 
 	return response, nil
@@ -106,8 +129,8 @@ func (s *URLService) CreateShortURL(req *models.ShortenRequest, userID string) (
 func (s *URLService) GetOriginalURL(shortCode string) (string, error) {
 	urlData, err := s.storage.GetAndIncrement(shortCode)
 	if err != nil {
-		if err == storage.ErrKeyNotFound {
-			return "", errors.New("URL not found or has expired")
+		if errors.Is(err, storage.ErrKeyNotFound) {
+			return "", ErrURLNotFound
 		}
 		return "", err
 	}
@@ -116,13 +139,17 @@ func (s *URLService) GetOriginalURL(shortCode string) (string, error) {
 }
 
 // GetURLInfo retrieves information about a shortened URL
-func (s *URLService) GetURLInfo(shortCode string) (*models.URLData, error) {
+func (s *URLService) GetURLInfo(shortCode, userID, role string) (*models.URLData, error) {
 	urlData, err := s.storage.Get(shortCode)
 	if err != nil {
-		if err == storage.ErrKeyNotFound {
-			return nil, errors.New("URL not found or has expired")
+		if errors.Is(err, storage.ErrKeyNotFound) {
+			return nil, ErrURLNotFound
 		}
 		return nil, err
+	}
+
+	if role != models.RoleAdmin && urlData.CreatedBy != userID {
+		return nil, ErrURLNotFound
 	}
 
 	return urlData, nil
@@ -132,48 +159,39 @@ func (s *URLService) GetURLInfo(shortCode string) (*models.URLData, error) {
 func (s *URLService) DeleteURL(shortCode, userID, role string) error {
 	urlData, err := s.storage.Get(shortCode)
 	if err != nil {
-		return err
+		if errors.Is(err, storage.ErrKeyNotFound) {
+			return ErrURLNotFound
+		}
+		return fmt.Errorf("failed to read URL: %w", err)
 	}
 
 	if role != models.RoleAdmin && urlData.CreatedBy != userID {
 		return ErrForbidden
 	}
 
-	return s.storage.Delete(shortCode)
+	if err := s.storage.Delete(shortCode); err != nil {
+		if errors.Is(err, storage.ErrKeyNotFound) {
+			return ErrURLNotFound
+		}
+		return fmt.Errorf("failed to delete URL: %w", err)
+	}
+	return nil
 }
 
 // GetAllURLs returns URLs visible to the caller
-func (s *URLService) GetAllURLs(userID, role string) []*models.URLData {
-	all := s.storage.GetAll()
-	if role == models.RoleAdmin {
-		return all
+func (s *URLService) GetAllURLs(userID, role string) ([]*models.URLData, error) {
+	urls, err := s.storage.GetAllFor(userID, role)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list URLs: %w", err)
 	}
-
-	filtered := make([]*models.URLData, 0, len(all))
-	for _, u := range all {
-		if u.CreatedBy == userID {
-			filtered = append(filtered, u)
-		}
-	}
-	return filtered
+	return urls, nil
 }
 
 // GetStats returns statistics
-func (s *URLService) GetStats() map[string]interface{} {
-	return s.storage.Stats()
-}
-
-// generateUniqueCode generates a unique short code
-func (s *URLService) generateUniqueCode() string {
-	const maxAttempts = 100
-	
-	for i := 0; i < maxAttempts; i++ {
-		code := utils.GenerateShortCode(6)
-		if !s.storage.Exists(code) {
-			return code
-		}
+func (s *URLService) GetStats(userID, role string) (map[string]interface{}, error) {
+	stats, err := s.storage.StatsFor(userID, role)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load statistics: %w", err)
 	}
-
-	// If we reach here, generate a longer code to almost guarantee uniqueness
-	return utils.GenerateShortCode(10)
+	return stats, nil
 }
