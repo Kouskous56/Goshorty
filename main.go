@@ -144,7 +144,7 @@ func main() {
 			return
 		}
 		// For other routes, serve index.html (SPA)
-		c.FileFromFS("/", http.FS(staticFS), "index.html")
+		c.FileFromFS("index.html", http.FS(staticFS))
 	})
 
 	// Start server
