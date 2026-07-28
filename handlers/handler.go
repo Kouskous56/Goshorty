@@ -25,7 +25,7 @@ func (h *Handler) CreateShortURL(c *gin.Context) {
 	
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Message: "Invalid request",
+			Message: "Invalid request: " + err.Error(),
 			Code:    "INVALID_REQUEST",
 		})
 		return
