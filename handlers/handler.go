@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"goshorty/models"
 	"goshorty/services"
@@ -42,6 +43,13 @@ func (h *Handler) CreateShortURL(c *gin.Context) {
 		})
 		return
 	}
+
+	// Use actual request host for the short URL
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	response.ShortURL = fmt.Sprintf("%s://%s/goshorty/%s/%s", scheme, c.Request.Host, response.ExpiresIn, response.ShortCode)
 
 	c.JSON(http.StatusCreated, response)
 }
