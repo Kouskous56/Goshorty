@@ -144,7 +144,9 @@ func main() {
 			return
 		}
 		// For other routes, serve index.html (SPA)
-		c.FileFromFS("index.html", http.FS(staticFS))
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		indexData, _ := fs.ReadFile(staticFiles, "static/index.html")
+		c.String(200, string(indexData))
 	})
 
 	// Start server
