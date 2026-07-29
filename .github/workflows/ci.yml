@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality and security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: go.sum
+
+      - name: Verify module files
+        run: |
+          go mod verify
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with coverage
+        run: |
+          go test ./... -count=1 -covermode=atomic -coverprofile=coverage.out
+          bash scripts/check-coverage.sh coverage.out 30
+
+      - name: Build
+        run: >-
+          go build -trimpath
+          -ldflags "-X main.commit=${GITHUB_SHA} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          -o dist/goshorty .
+
+      - name: Scan reachable vulnerabilities
+        uses: golang/govulncheck-action@v1
+        with:
+          repo-checkout: false
+          go-version-input: "1.26.5"
+          cache: false
+          go-package: ./...
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          if test -f coverage.out; then
+            {
+              echo "## Go coverage"
+              echo '```text'
+              go tool cover -func=coverage.out | tail -n 1
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  race:
+    name: Race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: go.sum
+
+      - name: Run race detector
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./... -count=1
+
+  postgres-e2e:
+    name: PostgreSQL integration and E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: goshorty_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d goshorty_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/goshorty_test?sslmode=disable
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/goshorty_test?sslmode=disable
+      SECRET_KEY: ci-only-signing-key-that-is-not-used-in-production
+      ADMIN_PASSWORD: ci-admin-password-rotate-me
+      ADMIN_EMAIL: admin@ci.local
+      PUBLIC_BASE_URL: http://127.0.0.1:8080
+      ALLOWED_ORIGINS: http://127.0.0.1:8080
+      TRUSTED_PROXIES: 127.0.0.1
+      GIN_MODE: release
+      TOKEN_TTL: 15m
+      METRICS_TOKEN: ci-only-metrics-token-with-at-least-32-bytes
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: go.sum
+
+      - name: Run PostgreSQL integration tests
+        run: |
+          go test ./storage -count=1 -v -covermode=atomic -coverprofile=storage-coverage.out
+          bash scripts/check-coverage.sh storage-coverage.out 65
+
+      - name: Build and run end-to-end API test
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -trimpath \
+            -ldflags "-X main.commit=${GITHUB_SHA} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o goshorty .
+          ./goshorty >goshorty-e2e.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            echo "----- GoShorty E2E server log -----"
+            cat goshorty-e2e.log
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/ready >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "GoShorty exited before becoming ready"
+              exit 1
+            fi
+            if test "$attempt" -eq 30; then
+              echo "GoShorty did not become ready in time"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          bash scripts/e2e.sh http://127.0.0.1:8080

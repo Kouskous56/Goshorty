@@ -31,3 +31,57 @@ func TestDatabaseURLFromEnvironment(t *testing.T) {
 		t.Fatalf("unexpected database URL: %s", cfg.Database.URL)
 	}
 }
+
+func TestSecurityConfig(t *testing.T) {
+	t.Setenv("PUBLIC_BASE_URL", "https://short.example.com")
+	t.Setenv("ALLOWED_ORIGINS", "https://short.example.com, http://localhost:3000/")
+	t.Setenv("TRUSTED_PROXIES", "100.64.0.0/10,127.0.0.1")
+
+	cfg := NewConfig()
+	if len(cfg.Security.AllowedOrigins) != 2 || cfg.Security.AllowedOrigins[1] != "http://localhost:3000" {
+		t.Fatalf("unexpected allowed origins: %#v", cfg.Security.AllowedOrigins)
+	}
+	if len(cfg.Security.TrustedProxies) != 2 {
+		t.Fatalf("unexpected trusted proxies: %#v", cfg.Security.TrustedProxies)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRejectsAllowedOriginWithPath(t *testing.T) {
+	t.Setenv("PUBLIC_BASE_URL", "https://short.example.com")
+	t.Setenv("ALLOWED_ORIGINS", "https://short.example.com/path")
+	if err := NewConfig().Validate(); err == nil {
+		t.Fatal("expected origin containing a path to be rejected")
+	}
+}
+
+func TestReleaseRequiresStrongMetricsToken(t *testing.T) {
+	t.Setenv("GIN_MODE", "release")
+	t.Setenv("PUBLIC_BASE_URL", "https://short.example.com")
+	t.Setenv("METRICS_TOKEN", "short")
+	if err := NewConfig().Validate(); err == nil {
+		t.Fatal("expected weak release metrics token to be rejected")
+	}
+
+	t.Setenv("METRICS_TOKEN", "metrics-token-with-at-least-32-bytes")
+	if err := NewConfig().Validate(); err != nil {
+		t.Fatalf("expected strong metrics token: %v", err)
+	}
+}
+
+func TestReleaseRequiresHTTPSExceptLoopback(t *testing.T) {
+	t.Setenv("GIN_MODE", "release")
+	t.Setenv("METRICS_TOKEN", "metrics-token-with-at-least-32-bytes")
+	t.Setenv("PUBLIC_BASE_URL", "http://short.example.com")
+	if err := NewConfig().Validate(); err == nil {
+		t.Fatal("expected public release URL without HTTPS to be rejected")
+	}
+
+	t.Setenv("PUBLIC_BASE_URL", "http://127.0.0.1:8080")
+	t.Setenv("ALLOWED_ORIGINS", "http://127.0.0.1:8080")
+	if err := NewConfig().Validate(); err != nil {
+		t.Fatalf("loopback release URL should remain available for CI: %v", err)
+	}
+}

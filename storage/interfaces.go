@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"context"
+
 	"goshorty/models"
 )
 
@@ -20,9 +22,16 @@ type UserStore interface {
 	GetUser(username string) (*models.User, error)
 	GetUserByID(id string) (*models.User, error)
 	VerifyPassword(username, password string) (bool, error)
+	UpdatePassword(userID, password string) error
+	RevokeTokens(userID string) error
 	UpdateUserRole(username, role string) error
 	GetAllUsers() ([]*models.User, error)
 	DeleteUser(username string) error
+}
+
+// HealthChecker reports whether a persistence dependency is ready.
+type HealthChecker interface {
+	Ping(ctx context.Context) error
 }
 
 var (

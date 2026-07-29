@@ -33,18 +33,24 @@ func (ah *AuthHandler) Register(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid")
 		return
 	}
+	if !validPasswordLength(req.Password) {
+		writeError(c, http.StatusBadRequest, "WEAK_PASSWORD", "Password must be between 12 and 72 bytes")
+		return
+	}
 
 	user, err := ah.userStorage.CreateUser(req.Username, req.Password, req.Email)
 	if err != nil {
 		if errors.Is(err, storage.ErrUsernameExists) {
+			auditSecurityEvent(c, "user.register", "denied", "reason", "username_taken")
 			writeError(c, http.StatusConflict, "USERNAME_TAKEN", "Username is already registered")
 			return
 		}
+		auditSecurityEvent(c, "user.register", "error", "reason", "storage_error")
 		writeError(c, http.StatusInternalServerError, "REGISTRATION_FAILED", "Registration failed")
 		return
 	}
 
-	token, err := ah.tokenService.GenerateToken(user.ID, user.Username, user.Role)
+	token, err := ah.tokenService.GenerateToken(user.ID, user.Username, user.Role, user.TokenVersion)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Message: "Failed to generate token",
@@ -52,6 +58,7 @@ func (ah *AuthHandler) Register(c *gin.Context) {
 		})
 		return
 	}
+	auditSecurityEvent(c, "user.register", "success", "subject_user_id", user.ID)
 
 	c.JSON(http.StatusCreated, models.LoginResponse{
 		Token:   token,
@@ -73,20 +80,22 @@ func (ah *AuthHandler) Login(c *gin.Context) {
 	valid, err := ah.userStorage.VerifyPassword(req.Username, req.Password)
 	if err != nil {
 		if !errors.Is(err, storage.ErrUserNotFound) {
+			auditSecurityEvent(c, "user.login", "error", "reason", "storage_error")
 			writeError(c, http.StatusInternalServerError, "AUTH_FAILED", "Authentication service unavailable")
 			return
 		}
+		auditSecurityEvent(c, "user.login", "denied", "reason", "invalid_credentials")
 		writeError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid credentials")
 		return
 	}
 	if !valid {
+		auditSecurityEvent(c, "user.login", "denied", "reason", "invalid_credentials")
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Message: "Invalid credentials",
 			Code:    "INVALID_CREDENTIALS",
 		})
 		return
 	}
-
 	user, err := ah.userStorage.GetUser(req.Username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
@@ -96,7 +105,7 @@ func (ah *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	token, err := ah.tokenService.GenerateToken(user.ID, user.Username, user.Role)
+	token, err := ah.tokenService.GenerateToken(user.ID, user.Username, user.Role, user.TokenVersion)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Message: "Failed to generate token",
@@ -104,12 +113,73 @@ func (ah *AuthHandler) Login(c *gin.Context) {
 		})
 		return
 	}
+	auditSecurityEvent(c, "user.login", "success", "subject_user_id", user.ID)
 
 	c.JSON(http.StatusOK, models.LoginResponse{
 		Token:   token,
 		User:    user,
 		Message: "Login successful",
 	})
+}
+
+// ChangePassword verifies the current password before replacing it.
+func (ah *AuthHandler) ChangePassword(c *gin.Context) {
+	var req models.ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid")
+		return
+	}
+	if !validPasswordLength(req.NewPassword) {
+		writeError(c, http.StatusBadRequest, "WEAK_PASSWORD", "New password must be between 12 and 72 bytes")
+		return
+	}
+	if req.CurrentPassword == req.NewPassword {
+		writeError(c, http.StatusBadRequest, "PASSWORD_UNCHANGED", "New password must be different")
+		return
+	}
+
+	username := c.GetString("username")
+	valid, err := ah.userStorage.VerifyPassword(username, req.CurrentPassword)
+	if err != nil {
+		if errors.Is(err, storage.ErrUserNotFound) {
+			auditSecurityEvent(c, "user.password_change", "denied", "reason", "invalid_credentials")
+			writeError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Current password is incorrect")
+		} else {
+			auditSecurityEvent(c, "user.password_change", "error", "reason", "storage_error")
+			writeError(c, http.StatusInternalServerError, "PASSWORD_CHANGE_FAILED", "Failed to change password")
+		}
+		return
+	}
+	if !valid {
+		auditSecurityEvent(c, "user.password_change", "denied", "reason", "invalid_credentials")
+		writeError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Current password is incorrect")
+		return
+	}
+	if err := ah.userStorage.UpdatePassword(c.GetString("user_id"), req.NewPassword); err != nil {
+		auditSecurityEvent(c, "user.password_change", "error", "reason", "storage_error")
+		writeError(c, http.StatusInternalServerError, "PASSWORD_CHANGE_FAILED", "Failed to change password")
+		return
+	}
+
+	auditSecurityEvent(c, "user.password_change", "success")
+	c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
+}
+
+// RevokeSessions invalidates all tokens for the current user, including the
+// token used for this request.
+func (ah *AuthHandler) RevokeSessions(c *gin.Context) {
+	if err := ah.userStorage.RevokeTokens(c.GetString("user_id")); err != nil {
+		auditSecurityEvent(c, "user.sessions_revoke", "error", "reason", "storage_error")
+		writeError(c, http.StatusInternalServerError, "SESSION_REVOKE_FAILED", "Failed to revoke sessions")
+		return
+	}
+	auditSecurityEvent(c, "user.sessions_revoke", "success")
+	c.JSON(http.StatusOK, gin.H{"message": "All sessions revoked"})
+}
+
+func validPasswordLength(password string) bool {
+	length := len([]byte(password))
+	return length >= 12 && length <= 72
 }
 
 // GetAllUsers returns all users (admin only)
@@ -136,19 +206,26 @@ func (ah *AuthHandler) UpdateUserRole(c *gin.Context) {
 
 	role := req["role"]
 	if err := ah.userStorage.UpdateUserRole(username, role); err != nil {
+		reason := "storage_error"
 		switch {
 		case errors.Is(err, storage.ErrUserNotFound):
+			reason = "user_not_found"
 			writeError(c, http.StatusNotFound, "USER_NOT_FOUND", "User not found")
 		case errors.Is(err, storage.ErrInvalidRole):
+			reason = "invalid_role"
 			writeError(c, http.StatusBadRequest, "INVALID_ROLE", "Role must be admin or user")
 		case errors.Is(err, storage.ErrLastAdmin):
+			reason = "last_admin"
 			writeError(c, http.StatusConflict, "LAST_ADMIN", "The last admin cannot be demoted")
 		default:
 			writeError(c, http.StatusInternalServerError, "UPDATE_FAILED", "Failed to update user role")
 		}
+		auditSecurityEvent(c, "admin.role_change", "denied",
+			"target_username", username, "reason", reason)
 		return
 	}
 
+	auditSecurityEvent(c, "admin.role_change", "success", "target_username", username, "new_role", role)
 	c.JSON(http.StatusOK, gin.H{
 		"message":  "User role updated",
 		"username": username,
@@ -161,17 +238,23 @@ func (ah *AuthHandler) DeleteUser(c *gin.Context) {
 	username := c.Param("username")
 
 	if err := ah.userStorage.DeleteUser(username); err != nil {
+		reason := "storage_error"
 		switch {
 		case errors.Is(err, storage.ErrUserNotFound):
+			reason = "user_not_found"
 			writeError(c, http.StatusNotFound, "USER_NOT_FOUND", "User not found")
 		case errors.Is(err, storage.ErrLastAdmin):
+			reason = "last_admin"
 			writeError(c, http.StatusConflict, "LAST_ADMIN", "The last admin cannot be deleted")
 		default:
 			writeError(c, http.StatusInternalServerError, "DELETE_FAILED", "Failed to delete user")
 		}
+		auditSecurityEvent(c, "admin.user_delete", "denied",
+			"target_username", username, "reason", reason)
 		return
 	}
 
+	auditSecurityEvent(c, "admin.user_delete", "success", "target_username", username)
 	c.JSON(http.StatusOK, gin.H{
 		"message":  "User deleted",
 		"username": username,
@@ -228,6 +311,11 @@ func (ah *AuthHandler) AuthMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if claims.TokenVersion != user.TokenVersion {
+			writeError(c, http.StatusUnauthorized, "TOKEN_REVOKED", "Token has been revoked")
+			c.Abort()
+			return
+		}
 
 		c.Set("user_id", user.ID)
 		c.Set("username", user.Username)
@@ -242,6 +330,7 @@ func AdminMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, exists := c.Get("role")
 		if !exists || role != models.RoleAdmin {
+			auditSecurityEvent(c, "admin.access", "denied", "route", c.FullPath())
 			c.JSON(http.StatusForbidden, models.ErrorResponse{
 				Message: "Admin access required",
 				Code:    "ADMIN_REQUIRED",

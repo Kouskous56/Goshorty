@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -53,14 +55,25 @@ func (s *PostgresStore) Close() {
 	s.pool.Close()
 }
 
+// Ping verifies that PostgreSQL is available for readiness checks.
+func (s *PostgresStore) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
 func (s *PostgresStore) migrate(ctx context.Context) error {
 	if _, err := s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version TEXT PRIMARY KEY,
+			checksum TEXT,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
 	`); err != nil {
 		return fmt.Errorf("create migration ledger: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT
+	`); err != nil {
+		return fmt.Errorf("upgrade migration ledger: %w", err)
 	}
 
 	entries, err := migrationFiles.ReadDir("migrations")
@@ -77,6 +90,7 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read database migration %s: %w", version, err)
 		}
+		checksum := migrationChecksum(migration)
 
 		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
@@ -87,15 +101,28 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 			return fmt.Errorf("lock database migrations: %w", err)
 		}
 
-		var applied bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`,
+		var storedChecksum *string
+		err = tx.QueryRow(ctx,
+			`SELECT checksum FROM schema_migrations WHERE version = $1`,
 			version,
-		).Scan(&applied); err != nil {
+		).Scan(&storedChecksum)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			tx.Rollback(ctx)
 			return fmt.Errorf("check database migration %s: %w", version, err)
 		}
-		if applied {
+		if err == nil {
+			if storedChecksum == nil {
+				if _, err := tx.Exec(ctx,
+					`UPDATE schema_migrations SET checksum = $1 WHERE version = $2`,
+					checksum, version,
+				); err != nil {
+					tx.Rollback(ctx)
+					return fmt.Errorf("backfill migration checksum %s: %w", version, err)
+				}
+			} else if *storedChecksum != checksum {
+				tx.Rollback(ctx)
+				return fmt.Errorf("migration %s checksum mismatch", version)
+			}
 			if err := tx.Commit(ctx); err != nil {
 				return fmt.Errorf("commit migration check %s: %w", version, err)
 			}
@@ -107,8 +134,8 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 			return fmt.Errorf("apply database migration %s: %w", version, err)
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO schema_migrations (version) VALUES ($1)`,
-			version,
+			`INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)`,
+			version, checksum,
 		); err != nil {
 			tx.Rollback(ctx)
 			return fmt.Errorf("record database migration %s: %w", version, err)
@@ -118,6 +145,11 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func migrationChecksum(migration []byte) string {
+	digest := sha256.Sum256(migration)
+	return hex.EncodeToString(digest[:])
 }
 
 func (s *PostgresStore) bootstrapAdmin(ctx context.Context, password, email string) error {
@@ -302,7 +334,7 @@ func (s *PostgresStore) GetUser(username string) (*models.User, error) {
 	ctx, cancel := databaseContext()
 	defer cancel()
 	return scanUser(s.pool.QueryRow(ctx, `
-		SELECT id, username, password_hash, email, role, created_at
+		SELECT id, username, password_hash, email, role, created_at, token_version
 		FROM users WHERE username = $1
 	`, username))
 }
@@ -311,7 +343,7 @@ func (s *PostgresStore) GetUserByID(id string) (*models.User, error) {
 	ctx, cancel := databaseContext()
 	defer cancel()
 	return scanUser(s.pool.QueryRow(ctx, `
-		SELECT id, username, password_hash, email, role, created_at
+		SELECT id, username, password_hash, email, role, created_at, token_version
 		FROM users WHERE id = $1
 	`, id))
 }
@@ -325,6 +357,45 @@ func (s *PostgresStore) VerifyPassword(username, password string) (bool, error) 
 		return false, nil
 	}
 	return true, nil
+}
+
+// UpdatePassword replaces a user's bcrypt password hash.
+func (s *PostgresStore) UpdatePassword(userID, password string) error {
+	passwordHash, err := hashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	ctx, cancel := databaseContext()
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $1, token_version = token_version + 1
+		WHERE id = $2
+	`, passwordHash, userID)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// RevokeTokens invalidates every token previously issued for a user.
+func (s *PostgresStore) RevokeTokens(userID string) error {
+	ctx, cancel := databaseContext()
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE users SET token_version = token_version + 1 WHERE id = $1
+	`, userID)
+	if err != nil {
+		return fmt.Errorf("revoke user tokens: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
 func (s *PostgresStore) UpdateUserRole(username, role string) error {
@@ -344,7 +415,7 @@ func (s *PostgresStore) UpdateUserRole(username, role string) error {
 		return fmt.Errorf("lock admin invariant: %w", err)
 	}
 	user, err := scanUser(tx.QueryRow(ctx, `
-		SELECT id, username, password_hash, email, role, created_at
+		SELECT id, username, password_hash, email, role, created_at, token_version
 		FROM users WHERE username = $1 FOR UPDATE
 	`, username))
 	if err != nil {
@@ -372,7 +443,7 @@ func (s *PostgresStore) GetAllUsers() ([]*models.User, error) {
 	ctx, cancel := databaseContext()
 	defer cancel()
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, username, password_hash, email, role, created_at
+		SELECT id, username, password_hash, email, role, created_at, token_version
 		FROM users ORDER BY created_at ASC, username ASC
 	`)
 	if err != nil {
@@ -407,7 +478,7 @@ func (s *PostgresStore) DeleteUser(username string) error {
 		return fmt.Errorf("lock admin invariant: %w", err)
 	}
 	user, err := scanUser(tx.QueryRow(ctx, `
-		SELECT id, username, password_hash, email, role, created_at
+		SELECT id, username, password_hash, email, role, created_at, token_version
 		FROM users WHERE username = $1 FOR UPDATE
 	`, username))
 	if err != nil {
@@ -483,7 +554,7 @@ func scanUser(row interface{ Scan(...any) error }) (*models.User, error) {
 	user := &models.User{}
 	if err := row.Scan(
 		&user.ID, &user.Username, &user.Password, &user.Email,
-		&user.Role, &user.CreatedAt,
+		&user.Role, &user.CreatedAt, &user.TokenVersion,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound

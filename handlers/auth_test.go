@@ -27,6 +27,8 @@ func setupAuthTest() (*gin.Engine, *storage.UserStorage, *services.TokenService)
 		auth.POST("/login", authHandler.Login)
 		auth.POST("/register", authHandler.Register)
 		auth.GET("/me", authHandler.AuthMiddleware(), authHandler.GetCurrentUser)
+		auth.PUT("/password", authHandler.AuthMiddleware(), authHandler.ChangePassword)
+		auth.POST("/revoke", authHandler.AuthMiddleware(), authHandler.RevokeSessions)
 	}
 
 	protected := router.Group("/api")
@@ -38,6 +40,109 @@ func setupAuthTest() (*gin.Engine, *storage.UserStorage, *services.TokenService)
 	}
 
 	return router, userStorage, tokenService
+}
+
+func TestChangePassword(t *testing.T) {
+	router, us, ts := setupAuthTest()
+	admin, _ := us.GetUser("admin")
+	token := tokenFor(t, ts, admin.ID, admin.Username, admin.Role)
+
+	body, _ := json.Marshal(models.ChangePasswordRequest{
+		CurrentPassword: "test-admin",
+		NewPassword:     "a-new-secure-password",
+	})
+	req, _ := http.NewRequest(http.MethodPut, "/api/auth/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	oldValid, _ := us.VerifyPassword("admin", "test-admin")
+	newValid, _ := us.VerifyPassword("admin", "a-new-secure-password")
+	if oldValid || !newValid {
+		t.Fatal("expected only the new password to be valid")
+	}
+
+	oldTokenRequest, _ := http.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	oldTokenRequest.Header.Set("Authorization", "Bearer "+token)
+	oldTokenResponse := httptest.NewRecorder()
+	router.ServeHTTP(oldTokenResponse, oldTokenRequest)
+	if oldTokenResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected password change to revoke old token, got %d", oldTokenResponse.Code)
+	}
+
+	loginBody, _ := json.Marshal(models.LoginRequest{
+		Username: "admin",
+		Password: "a-new-secure-password",
+	})
+	loginRequest, _ := http.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginResponse := httptest.NewRecorder()
+	router.ServeHTTP(loginResponse, loginRequest)
+	if loginResponse.Code != http.StatusOK {
+		t.Fatalf("expected login with new password to succeed, got %d", loginResponse.Code)
+	}
+}
+
+func TestChangePasswordRejectsWrongCurrentAndWeakNewPassword(t *testing.T) {
+	router, us, ts := setupAuthTest()
+	admin, _ := us.GetUser("admin")
+	token := tokenFor(t, ts, admin.ID, admin.Username, admin.Role)
+
+	tests := []struct {
+		name     string
+		current  string
+		next     string
+		expected int
+	}{
+		{"wrong current", "wrong-password", "a-new-secure-password", http.StatusUnauthorized},
+		{"weak new", "test-admin", "short", http.StatusBadRequest},
+		{"unchanged", "test-admin", "test-admin", http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, _ := json.Marshal(models.ChangePasswordRequest{
+				CurrentPassword: tt.current,
+				NewPassword:     tt.next,
+			})
+			req, _ := http.NewRequest(http.MethodPut, "/api/auth/password", bytes.NewBuffer(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+token)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != tt.expected {
+				t.Fatalf("expected %d, got %d: %s", tt.expected, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestRevokeSessionsInvalidatesCurrentToken(t *testing.T) {
+	router, users, tokenService := setupAuthTest()
+	admin, err := users.GetUser("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := tokenFor(t, tokenService, admin.ID, admin.Username, admin.Role)
+
+	revokeRequest := httptest.NewRequest(http.MethodPost, "/api/auth/revoke", nil)
+	revokeRequest.Header.Set("Authorization", "Bearer "+token)
+	revokeResponse := httptest.NewRecorder()
+	router.ServeHTTP(revokeResponse, revokeRequest)
+	if revokeResponse.Code != http.StatusOK {
+		t.Fatalf("expected revoke to return 200, got %d: %s", revokeResponse.Code, revokeResponse.Body.String())
+	}
+
+	meRequest := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	meRequest.Header.Set("Authorization", "Bearer "+token)
+	meResponse := httptest.NewRecorder()
+	router.ServeHTTP(meResponse, meRequest)
+	if meResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected revoked token to return 401, got %d", meResponse.Code)
+	}
 }
 
 func tokenFor(t *testing.T, ts *services.TokenService, userID, username, role string) string {
@@ -53,7 +158,7 @@ func TestRegister_Success(t *testing.T) {
 
 	body, _ := json.Marshal(models.RegisterRequest{
 		Username: "newuser",
-		Password: "password123",
+		Password: "password1234",
 		Email:    "new@test.com",
 	})
 	req, _ := http.NewRequest("POST", "/api/auth/register", bytes.NewBuffer(body))
@@ -120,7 +225,7 @@ func TestRegister_Duplicate(t *testing.T) {
 
 	payload := models.RegisterRequest{
 		Username: "dupuser",
-		Password: "password123",
+		Password: "password1234",
 		Email:    "dup@test.com",
 	}
 	body, _ := json.Marshal(payload)

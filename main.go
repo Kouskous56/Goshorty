@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,7 +23,20 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
+var (
+	version   = "3.0.0"
+	commit    = "unknown"
+	buildTime = "unknown"
+)
+
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+	log.SetFlags(0)
+	log.SetOutput(slog.NewLogLogger(logger.Handler(), slog.LevelInfo).Writer())
+
 	// Load configuration
 	cfg := config.NewConfig()
 	if err := cfg.Validate(); err != nil {
@@ -32,6 +47,9 @@ func main() {
 	secretKey := os.Getenv("SECRET_KEY")
 	if secretKey == "" {
 		log.Fatal("SECRET_KEY environment variable is required")
+	}
+	if gin.Mode() == gin.ReleaseMode && len([]byte(secretKey)) < 32 {
+		log.Fatal("SECRET_KEY must be at least 32 bytes in release mode")
 	}
 	tokenTTL := getEnv("TOKEN_TTL", "24h")
 	ttl, err := time.ParseDuration(tokenTTL)
@@ -47,12 +65,16 @@ func main() {
 		adminPassword = "admin123"
 		log.Println("WARNING: using insecure default ADMIN_PASSWORD for development only")
 	}
+	if gin.Mode() == gin.ReleaseMode && (len([]byte(adminPassword)) < 12 || len([]byte(adminPassword)) > 72) {
+		log.Fatal("ADMIN_PASSWORD must be between 12 and 72 bytes in release mode")
+	}
 	adminEmail := getEnv("ADMIN_EMAIL", "admin@goshorty.local")
 
 	// Initialize persistence. Production requires PostgreSQL; local development
 	// may use the in-memory implementation for a zero-setup workflow.
 	var urlStorage storage.URLStore
 	var userStorage storage.UserStore
+	var healthChecker storage.HealthChecker
 	var closeStorage func()
 
 	if cfg.Database.URL != "" {
@@ -68,6 +90,7 @@ func main() {
 
 		urlStorage = postgresStore
 		userStorage = postgresStore
+		healthChecker = postgresStore
 		closeStorage = func() {
 			cleanupCancel()
 			postgresStore.Close()
@@ -94,14 +117,22 @@ func main() {
 	tokenService := services.NewTokenService(secretKey)
 
 	// Initialize handlers
-	h := handlers.NewHandler(urlService)
+	h := handlers.NewHandlerWithHealth(urlService, healthChecker)
 	authHandler := handlers.NewAuthHandler(userStorage, tokenService)
 
 	// Create Gin router
-	router := gin.Default()
+	router := gin.New()
+	if err := router.SetTrustedProxies(cfg.Security.TrustedProxies); err != nil {
+		log.Fatalf("Invalid TRUSTED_PROXIES configuration: %v", err)
+	}
 
 	// Middleware
-	router.Use(corsMiddleware())
+	metrics := NewHTTPMetrics()
+	router.Use(observabilityMiddleware(logger, metrics))
+	router.Use(structuredRecovery(logger))
+	router.Use(securityHeadersMiddleware())
+	router.Use(corsMiddleware(cfg.Security.AllowedOrigins))
+	router.Use(requestBodyLimitMiddleware(cfg.Security.MaxRequestBytes))
 
 	// Serve embedded static files
 	staticFS, err := fs.Sub(staticFiles, "static")
@@ -112,6 +143,17 @@ func main() {
 
 	// Health check (no auth required)
 	router.GET("/health", h.Health)
+	router.GET("/ready", h.Ready)
+	router.GET("/metrics", metricsAuthMiddleware(cfg.Security.MetricsToken), metrics.Handler)
+	router.GET("/version", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"version":    version,
+			"commit":     commit,
+			"build_time": buildTime,
+		})
+	})
+
+	rateLimiter := handlers.NewRateLimiter()
 
 	// API v1 routes
 	api := router.Group("/api")
@@ -119,8 +161,8 @@ func main() {
 		// Auth routes (no auth required)
 		auth := api.Group("/auth")
 		{
-			auth.POST("/login", authHandler.Login)
-			auth.POST("/register", authHandler.Register)
+			auth.POST("/login", rateLimiter.Limit("login", 10, time.Minute), authHandler.Login)
+			auth.POST("/register", rateLimiter.Limit("register", 5, time.Hour), authHandler.Register)
 		}
 
 		// Protected routes (auth required)
@@ -129,9 +171,11 @@ func main() {
 		{
 			// Current user info
 			protected.GET("/auth/me", authHandler.GetCurrentUser)
+			protected.PUT("/auth/password", rateLimiter.Limit("password", 5, time.Hour), authHandler.ChangePassword)
+			protected.POST("/auth/revoke", rateLimiter.Limit("revoke", 5, time.Hour), authHandler.RevokeSessions)
 
 			// URL shortening (protected)
-			protected.POST("/shorten", h.CreateShortURL)
+			protected.POST("/shorten", rateLimiter.Limit("shorten", 60, time.Minute), h.CreateShortURL)
 			protected.GET("/shorten/:code", h.GetURLInfo)
 			protected.DELETE("/shorten/:code", h.DeleteURL)
 			protected.GET("/shorten/all", h.GetAllURLs)
@@ -149,13 +193,13 @@ func main() {
 	}
 
 	// Redirect route - handles goshorty/[timeout]/[code]
-	router.GET("/goshorty/:timeout/:code", h.Redirect)
+	router.GET("/goshorty/:timeout/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
 
 	// Root route (API info)
 	router.GET("/api", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"service": "GoShorty - URL Shortener with TTL",
-			"version": "2.0.0",
+			"version": version,
 			"features": []string{
 				"URL shortening with auto-expiration",
 				"User authentication",
@@ -165,10 +209,15 @@ func main() {
 			"frontend": "/",
 			"endpoints": gin.H{
 				"GET /health":                        "Health check",
+				"GET /ready":                         "PostgreSQL readiness check",
+				"GET /metrics":                       "Prometheus-compatible HTTP metrics",
+				"GET /version":                       "Release build metadata",
 				"GET /goshorty/:timeout/:code":       "Redirect to original URL",
 				"POST /api/auth/login":               "Login user",
 				"POST /api/auth/register":            "Register new user",
 				"GET /api/auth/me":                   "Current user info",
+				"PUT /api/auth/password":             "Change current user password",
+				"POST /api/auth/revoke":              "Revoke all current-user sessions",
 				"POST /api/shorten":                  "Create short URL",
 				"GET /api/shorten/:code":             "Get URL info",
 				"DELETE /api/shorten/:code":          "Delete URL",
@@ -197,32 +246,44 @@ func main() {
 	// Start server
 	addr := cfg.Server.Port
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: router,
+		Addr:              addr,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Channel to listen for OS signals
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(quit)
+	serverErrors := make(chan error, 1)
 
 	// Start server in goroutine
 	go func() {
 		log.Printf("Starting GoShorty server on %s", addr)
 		log.Printf("Open %s in your browser", cfg.Server.BaseURL)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrors <- err
 		}
 	}()
 
-	// Wait for signal
-	sig := <-quit
-	log.Printf("Received signal: %v, shutting down...", sig)
+	// Wait for a shutdown signal or an unexpected listener failure.
+	select {
+	case sig := <-quit:
+		log.Printf("Received signal: %v, shutting down...", sig)
+	case err := <-serverErrors:
+		closeStorage()
+		log.Fatalf("HTTP server failed: %v", err)
+	}
 
 	// Graceful shutdown with 5s timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
+		closeStorage()
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
@@ -236,20 +297,4 @@ func getEnv(key, fallback string) string {
 		return val
 	}
 	return fallback
-}
-
-// corsMiddleware adds CORS headers
-func corsMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-
-		c.Next()
-	}
 }
