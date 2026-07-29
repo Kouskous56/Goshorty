@@ -4,6 +4,10 @@ A production-ready URL shortener service built with Go, featuring automatic expi
 
 ## Features
 
+Production hardening includes origin-allowlisted CORS, browser security headers,
+per-route rate limiting, a 1 MiB request-body limit, authenticated password
+rotation, and separate liveness/PostgreSQL readiness checks.
+
 - ✅ Create short URLs with automatic TTL expiration
 - ✅ Multiple TTL options: 5m, 15m, 1h, 24h, 7 days (168h)
 - ✅ Custom short codes (optional)
@@ -41,10 +45,30 @@ GoShorty/
 ## Installation
 
 ### Prerequisites
-- Go 1.21 or higher
+- Go 1.26.5 or higher (includes required standard-library security fixes)
 - Windows, macOS, or Linux
 
 ### Setup
+
+Recommended environment bootstrap:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-env.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/doctor.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev.ps1
+```
+
+On Linux/macOS/WSL:
+
+```bash
+bash scripts/setup-env.sh
+bash scripts/doctor.sh
+bash scripts/dev.sh
+```
+
+This starts PostgreSQL 16 through Docker Compose and runs GoShorty with the
+ignored `.env.local`. See [ENVIRONMENTS.md](ENVIRONMENTS.md) for development,
+test, CI, and Railway production configuration.
 
 1. Navigate to the project directory:
 ```bash
@@ -67,6 +91,24 @@ SECRET_KEY="development-secret-change-me" go run .
 ```
 
 The server will start on `http://localhost:8080`
+
+## Quality gate
+
+GitHub Actions runs formatting, module verification, vet, unit tests, coverage
+thresholds, a Linux race detector, `govulncheck`, PostgreSQL integration tests,
+and an end-to-end API flow for every pull request and push to `main`.
+
+Local equivalents:
+
+```bash
+go test ./... -count=1
+go vet ./...
+go test ./... -covermode=atomic -coverprofile=coverage.out
+bash scripts/check-coverage.sh coverage.out 30
+```
+
+See [INTEGRATION_TESTING.md](INTEGRATION_TESTING.md) for PostgreSQL, race, and
+E2E instructions.
 
 ## API Documentation
 
@@ -173,6 +215,44 @@ Redirects to the original URL if not expired. Returns 404 if expired or not foun
 }
 ```
 
+### Readiness Check
+
+**Endpoint:** `GET /ready`
+
+Returns `200` only when required production dependencies, including PostgreSQL,
+are reachable. Railway uses this endpoint for deployment health checks.
+
+**Endpoint:** `GET /metrics`
+
+Returns Prometheus-compatible HTTP request counters and duration summaries.
+Every response also carries `X-Request-ID`, which matches the structured JSON
+request log. Release deployments require
+`Authorization: Bearer <METRICS_TOKEN>`.
+
+**Endpoint:** `GET /version`
+
+Returns the application version, source commit, and build timestamp.
+
+Operational procedures, backup/restore drills, alerts, and deployment
+verification are documented in [OPERATIONS.md](OPERATIONS.md). Security
+boundaries and token revocation semantics are documented in
+[SECURITY.md](SECURITY.md).
+
+### Change Password
+
+**Endpoint:** `PUT /api/auth/password`
+
+Requires `Authorization: Bearer <token>`.
+
+```json
+{
+  "current_password": "current-password",
+  "new_password": "new-unique-password"
+}
+```
+
+The new password must be between 12 and 72 bytes.
+
 ## Usage Examples
 
 ### Using cURL
@@ -234,6 +314,20 @@ console.log(data.short_url);
 - **Migrations:** Embedded, versioned SQL migrations run automatically at startup
 - **Consistency:** Unique short-code constraint, transactional admin invariants, atomic visit counters
 - **Cleanup:** Expired URLs are removed in bounded background batches
+
+### Production security
+
+- Login: 10 requests/minute/IP
+- Registration: 5 requests/hour/IP
+- Password changes: 5 requests/hour/IP
+- URL creation: 60 requests/minute/IP
+- Redirects: 300 requests/minute/IP
+- Request bodies: maximum 1 MiB
+- CORS defaults to `PUBLIC_BASE_URL`; override with comma-separated
+  `ALLOWED_ORIGINS`
+- Trusted reverse proxies default to Railway's `100.64.0.0/10`; override with
+  comma-separated `TRUSTED_PROXIES`
+- HTTP timeouts: 5s headers, 15s read/write, 60s idle
 
 ### Concurrency
 

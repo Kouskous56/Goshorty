@@ -13,6 +13,7 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
+	Security SecurityConfig
 	TTL      TTLConfig
 }
 
@@ -25,6 +26,14 @@ type ServerConfig struct {
 // DatabaseConfig holds persistent storage settings.
 type DatabaseConfig struct {
 	URL string
+}
+
+// SecurityConfig holds browser and reverse-proxy trust settings.
+type SecurityConfig struct {
+	AllowedOrigins  []string
+	TrustedProxies  []string
+	MaxRequestBytes int64
+	MetricsToken    string
 }
 
 // TTLConfig holds TTL duration settings
@@ -55,13 +64,20 @@ func baseURLFromEnv(defaultURL string) string {
 
 // NewConfig creates a new configuration with default values
 func NewConfig() *Config {
+	baseURL := baseURLFromEnv("http://localhost:8080")
 	return &Config{
 		Server: ServerConfig{
 			Port:    portFromEnv(":8080"),
-			BaseURL: baseURLFromEnv("http://localhost:8080"),
+			BaseURL: baseURL,
 		},
 		Database: DatabaseConfig{
 			URL: os.Getenv("DATABASE_URL"),
+		},
+		Security: SecurityConfig{
+			AllowedOrigins:  listFromEnv("ALLOWED_ORIGINS", baseURL),
+			TrustedProxies:  listFromEnv("TRUSTED_PROXIES", "100.64.0.0/10"),
+			MaxRequestBytes: 1 << 20,
+			MetricsToken:    os.Getenv("METRICS_TOKEN"),
 		},
 		TTL: TTLConfig{
 			Options: map[string]time.Duration{
@@ -73,6 +89,21 @@ func NewConfig() *Config {
 			},
 		},
 	}
+}
+
+func listFromEnv(key, fallback string) []string {
+	value := os.Getenv(key)
+	if value == "" {
+		value = fallback
+	}
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(strings.TrimRight(part, "/")); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
 }
 
 // Validate verifies configuration values that affect externally visible URLs.
@@ -87,5 +118,29 @@ func (c *Config) Validate() error {
 	if publicURL.Scheme != "http" && publicURL.Scheme != "https" {
 		return fmt.Errorf("PUBLIC_BASE_URL must use http or https")
 	}
+	if os.Getenv("GIN_MODE") == "release" && publicURL.Scheme != "https" && !isLoopbackHost(publicURL.Hostname()) {
+		return fmt.Errorf("PUBLIC_BASE_URL must use https in release mode")
+	}
+	for _, origin := range c.Security.AllowedOrigins {
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Path != "" {
+			return fmt.Errorf("ALLOWED_ORIGINS entries must be origins without paths")
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return fmt.Errorf("ALLOWED_ORIGINS entries must use http or https")
+		}
+	}
+	if os.Getenv("GIN_MODE") == "release" && len([]byte(c.Security.MetricsToken)) < 32 {
+		return fmt.Errorf("METRICS_TOKEN must be at least 32 bytes in release mode")
+	}
 	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }

@@ -13,11 +13,12 @@ import (
 
 // TokenClaims represents JWT-like claims
 type TokenClaims struct {
-	UserID    string `json:"user_id"`
-	Username  string `json:"username"`
-	Role      string `json:"role"`
-	IssuedAt  int64  `json:"issued_at"`
-	ExpiresAt int64  `json:"expires_at"`
+	UserID       string `json:"user_id"`
+	Username     string `json:"username"`
+	Role         string `json:"role"`
+	TokenVersion int64  `json:"token_version"`
+	IssuedAt     int64  `json:"issued_at"`
+	ExpiresAt    int64  `json:"expires_at"`
 }
 
 // TokenTTL is the duration before a token expires (configurable via TOKEN_TTL env var)
@@ -37,13 +38,18 @@ func NewTokenService(secret string) *TokenService {
 }
 
 // GenerateToken creates a signed token: base64(payload).base64(signature)
-func (ts *TokenService) GenerateToken(userID, username, role string) (string, error) {
+func (ts *TokenService) GenerateToken(userID, username, role string, tokenVersion ...int64) (string, error) {
+	version := int64(0)
+	if len(tokenVersion) > 0 {
+		version = tokenVersion[0]
+	}
 	claims := TokenClaims{
-		UserID:    userID,
-		Username:  username,
-		Role:      role,
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(TokenTTL).Unix(),
+		UserID:       userID,
+		Username:     username,
+		Role:         role,
+		TokenVersion: version,
+		IssuedAt:     time.Now().Unix(),
+		ExpiresAt:    time.Now().Add(TokenTTL).Unix(),
 	}
 
 	claimsJSON, err := json.Marshal(claims)

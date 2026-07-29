@@ -74,6 +74,7 @@ graph LR
     B --> E[PUBLIC_BASE_URL]
     B --> F[GIN_MODE=release]
     B --> G[DATABASE_URL]
+    B --> H[METRICS_TOKEN]
 ```
 
 **Bước 3.1** — Set environment variables
@@ -85,6 +86,7 @@ graph LR
 | `DATABASE_URL` | ✅ **YES** | Railway PostgreSQL service reference |
 | `ADMIN_EMAIL` | No | `admin@yourdomain.com` |
 | `PUBLIC_BASE_URL` | ✅ **YES** | Domain HTTPS do Railway cấp, ví dụ `https://goshorty.up.railway.app` |
+| `METRICS_TOKEN` | ✅ **YES** | Secret ngẫu nhiên tối thiểu 32 bytes để scrape `/metrics` |
 | `TOKEN_TTL` | No | `24h` (mặc định) |
 | `GIN_MODE` | No | `release` (để tắt debug) |
 
@@ -122,6 +124,19 @@ railway env set PUBLIC_BASE_URL=https://goshorty.up.railway.app
 
 ## Environment Variables Reference
 
+Security-related optional variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ALLOWED_ORIGINS` | `PUBLIC_BASE_URL` | Comma-separated browser origins allowed by CORS; do not include paths |
+| `TRUSTED_PROXIES` | `100.64.0.0/10` | Reverse-proxy CIDRs trusted when resolving the client IP |
+| `METRICS_TOKEN` | empty ở debug | Bắt buộc tối thiểu 32 bytes khi `GIN_MODE=release` |
+
+> **Password rotation:** `ADMIN_PASSWORD` creates the bootstrap admin only when
+> that account does not yet exist. Changing this Railway variable later does
+> not update the PostgreSQL password. Sign in and use the **Security** tab, or
+> call `PUT /api/auth/password`, to rotate the stored password.
+
 | Variable | Mặc định | Production |
 |----------|----------|------------|
 | `SECRET_KEY` | **required** | `openssl rand -hex 64` |
@@ -132,6 +147,7 @@ railway env set PUBLIC_BASE_URL=https://goshorty.up.railway.app
 | `BASE_URL` | — | Chỉ giữ để tương thích; `PUBLIC_BASE_URL` được ưu tiên |
 | `PORT` | `8080` | Railway tự set |
 | `TOKEN_TTL` | `24h` | Giữ nguyên |
+| `METRICS_TOKEN` | empty ở debug | **Bắt buộc** khi `GIN_MODE=release`; không dùng chung với `SECRET_KEY` |
 | `GIN_MODE` | debug | `release` |
 
 ---
@@ -177,8 +193,9 @@ các migration còn thiếu khi khởi động; không cần chạy SQL thủ c�
 Sau khi deploy, kiểm tra:
 
 ```bash
-# Health check
+# Liveness and PostgreSQL readiness
 curl https://goshorty.up.railway.app/health
+curl https://goshorty.up.railway.app/ready
 
 # API info
 curl https://goshorty.up.railway.app/api

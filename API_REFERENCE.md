@@ -1,5 +1,19 @@
 # API Complete Reference
 
+## Production operational endpoints
+
+| Method | Path | Authentication | Purpose |
+|---|---|---|---|
+| `GET` | `/health` | Public | Process liveness |
+| `GET` | `/ready` | Public | Database readiness |
+| `GET` | `/version` | Public | Version, commit and build timestamp |
+| `GET` | `/metrics` | `Bearer METRICS_TOKEN` in release | Prometheus metrics |
+| `POST` | `/api/auth/revoke` | User bearer token | Revoke every session for the current user |
+
+`POST /api/auth/revoke` invalidates the token used for the request as well as
+all other tokens previously issued to that user. The next protected request
+with an old token returns HTTP 401.
+
 ## Base URL
 ```
 http://localhost:8080/api

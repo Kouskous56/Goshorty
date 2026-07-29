@@ -20,3 +20,20 @@ Thumbs.db
 
 # Go
 vendor/
+
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Build and test output
+goshorty
+dist/
+coverage.out
+storage-coverage.out
+*.log
+
+# Local database state (when bind mounts are used)
+.data/
+backups/

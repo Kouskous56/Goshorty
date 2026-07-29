@@ -761,6 +761,41 @@ Deliverables:
 - Dashboard/log đủ để chẩn đoán lỗi.
 - Threat model ngắn cho auth, redirects và admin.
 
+### Trạng thái Giai đoạn 3C — Hoàn thành ngày 29/07/2026
+
+- Log ứng dụng và HTTP request dùng JSON; mỗi response có `X-Request-ID`.
+- Request log và Prometheus metrics dùng route template để không làm lộ short
+  code hoặc tạo label cardinality không giới hạn.
+- Thêm `GET /metrics` với request counter và duration summary.
+- Panic được phục hồi thành response chuẩn và structured log, không trả stack
+  trace cho client.
+- Thêm `token_version` vào token và user storage. Đổi mật khẩu tăng version
+  nguyên tử, vì vậy mọi token cũ của user bị thu hồi ngay.
+- Thêm migration `002_token_version.sql`, tương thích user/token version 0 hiện
+  hữu.
+- Thêm backup/restore script cho PostgreSQL local với custom format, checksum
+  và confirmation flag bắt buộc khi restore.
+- Thêm `OPERATIONS.md` cho alert, backup policy, restore drill, incident/secret
+  rotation và deployment verification.
+- Thêm `SECURITY.md` mô tả trust boundary, threat/control và token revocation.
+
+### Trạng thái Giai đoạn 3D — Hoàn thành ngày 29/07/2026
+
+- Thêm structured `security_audit` events cho login/register, password change,
+  session revocation, role change và user deletion; không log credential/token.
+- Thêm `POST /api/auth/revoke` để user tự thu hồi toàn bộ session mà không cần
+  đổi mật khẩu.
+- Bảo vệ `GET /metrics` bằng Bearer `METRICS_TOKEN` bắt buộc tối thiểu 32 bytes
+  trong release mode; so sánh token constant-time.
+- Migration ledger lưu SHA-256; startup từ chối migration đã áp dụng nhưng bị
+  sửa. Ledger cũ được backfill checksum trong lần nâng cấp đầu tiên.
+- Sửa lifecycle HTTP: listen failure được chuyển về main goroutine và đóng
+  storage; shutdown failure cũng đóng dependency trước khi exit.
+- Thêm `GET /version` với version, commit SHA và build timestamp; CI nhúng build
+  metadata bằng linker flags.
+- Bổ sung test audit leakage, metrics auth, revoke-all, migration checksum và
+  PostgreSQL tamper rejection.
+
 ### Giai đoạn 4 — API/frontend quality
 
 Công việc:

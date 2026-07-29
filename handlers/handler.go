@@ -1,17 +1,26 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"goshorty/models"
 	"goshorty/services"
+	"goshorty/storage"
 )
 
 // Handler holds all HTTP handlers and their dependencies
 type Handler struct {
-	urlService *services.URLService
+	urlService    *services.URLService
+	healthChecker storage.HealthChecker
+}
+
+// NewHandlerWithHealth creates a handler with a persistence readiness check.
+func NewHandlerWithHealth(urlService *services.URLService, checker storage.HealthChecker) *Handler {
+	return &Handler{urlService: urlService, healthChecker: checker}
 }
 
 // NewHandler creates a new handler instance
@@ -164,6 +173,22 @@ func (h *Handler) Health(c *gin.Context) {
 		"status":  "ok",
 		"service": "goshorty",
 	})
+}
+
+// Ready reports whether required persistence dependencies are available.
+func (h *Handler) Ready(c *gin.Context) {
+	if h.healthChecker != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		if err := h.healthChecker.Ping(ctx); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status":  "not_ready",
+				"service": "goshorty",
+			})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ready", "service": "goshorty"})
 }
 
 func writeError(c *gin.Context, status int, code, message string) {

@@ -128,6 +128,36 @@ func (us *UserStorage) VerifyPassword(username, password string) (bool, error) {
 	return true, nil
 }
 
+// UpdatePassword replaces a user's bcrypt password hash.
+func (us *UserStorage) UpdatePassword(userID, password string) error {
+	passwordHash, err := hashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	us.mu.Lock()
+	defer us.mu.Unlock()
+	user, exists := us.byID[userID]
+	if !exists {
+		return ErrUserNotFound
+	}
+	user.Password = passwordHash
+	user.TokenVersion++
+	return nil
+}
+
+// RevokeTokens invalidates every token previously issued for a user.
+func (us *UserStorage) RevokeTokens(userID string) error {
+	us.mu.Lock()
+	defer us.mu.Unlock()
+	user, exists := us.byID[userID]
+	if !exists {
+		return ErrUserNotFound
+	}
+	user.TokenVersion++
+	return nil
+}
+
 // UpdateUserRole updates a user's role (admin only)
 func (us *UserStorage) UpdateUserRole(username, role string) error {
 	us.mu.Lock()

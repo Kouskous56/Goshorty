@@ -4,6 +4,6 @@
 
 [deploy]
   startCommand = "./app"
-  healthcheckPath = "/health"
+  healthcheckPath = "/ready"
   restartPolicyType = "ON_FAILURE"
   restartPolicyMaxRetries = 10

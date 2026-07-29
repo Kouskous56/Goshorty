@@ -519,6 +519,9 @@
             <button class="tab-button" onclick="switchTab(event, 'myUrlsTab')">
                 📋 My URLs
             </button>
+            <button class="tab-button" onclick="switchTab(event, 'securityTab')">
+                Security
+            </button>
             <button class="tab-button admin-only" style="display: none;" onclick="switchTab(event, 'allUrlsTab')">
                 👁️ All URLs
             </button>
@@ -582,6 +585,39 @@
                 </div>
             </div>
             <div id="myUrlsList" class="url-list"></div>
+        </div>
+
+        <!-- Security Tab -->
+        <div id="securityTab" class="tab-content">
+            <h3>Change Password</h3>
+            <p style="margin-bottom: 20px; color: #666;">
+                Use a unique password between 12 and 72 bytes.
+            </p>
+            <div class="form-row full">
+                <div class="form-group">
+                    <label>Current Password</label>
+                    <input type="password" id="currentPassword" autocomplete="current-password">
+                </div>
+            </div>
+            <div class="form-row full">
+                <div class="form-group">
+                    <label>New Password</label>
+                    <input type="password" id="newPassword" autocomplete="new-password">
+                </div>
+            </div>
+            <div class="form-row full">
+                <div class="form-group">
+                    <label>Confirm New Password</label>
+                    <input type="password" id="confirmNewPassword" autocomplete="new-password">
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="handleChangePassword()">Change Password</button>
+            <hr style="margin: 30px 0; border: 0; border-top: 1px solid #eee;">
+            <h3>Revoke Sessions</h3>
+            <p style="margin-bottom: 20px; color: #666;">
+                Sign out this browser and invalidate every token previously issued to your account.
+            </p>
+            <button class="btn btn-secondary" onclick="handleRevokeSessions()">Revoke All Sessions</button>
         </div>
 
         <!-- All URLs Tab (Admin) -->
@@ -716,6 +752,11 @@
 
             if (!username || !email || !password) {
                 showError('Please fill in all fields');
+                return;
+            }
+            const passwordBytes = new TextEncoder().encode(password).length;
+            if (passwordBytes < 12 || passwordBytes > 72) {
+                showError('Password must be between 12 and 72 bytes');
                 return;
             }
 
@@ -1069,6 +1110,74 @@
             }
         }
 
+        async function handleChangePassword() {
+            const currentPassword = document.getElementById('currentPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmNewPassword = document.getElementById('confirmNewPassword').value;
+
+            if (!currentPassword || !newPassword || !confirmNewPassword) {
+                showError('Please fill in all password fields');
+                return;
+            }
+            const passwordBytes = new TextEncoder().encode(newPassword).length;
+            if (passwordBytes < 12 || passwordBytes > 72) {
+                showError('New password must be between 12 and 72 bytes');
+                return;
+            }
+            if (newPassword !== confirmNewPassword) {
+                showError('New passwords do not match');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/auth/password`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${currentToken}`
+                    },
+                    body: JSON.stringify({
+                        current_password: currentPassword,
+                        new_password: newPassword
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    showError(data.message || 'Failed to change password');
+                    return;
+                }
+                document.getElementById('currentPassword').value = '';
+                document.getElementById('newPassword').value = '';
+                document.getElementById('confirmNewPassword').value = '';
+                alert('Password changed. All previous sessions were revoked; please sign in again.');
+                clearLocalSession();
+                location.reload();
+            } catch (error) {
+                showError('Connection error: ' + error.message);
+            }
+        }
+
+        async function handleRevokeSessions() {
+            if (!confirm('Revoke every session and sign out now?')) {
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/auth/revoke`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${currentToken}` }
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    showError(data.message || 'Failed to revoke sessions');
+                    return;
+                }
+                clearLocalSession();
+                location.reload();
+            } catch (error) {
+                showError('Connection error: ' + error.message);
+            }
+        }
+
         function switchTab(event, tabName) {
             // Hide all tab contents
             const tabContents = document.querySelectorAll('.tab-content');
@@ -1085,10 +1194,16 @@
 
         function handleLogout() {
             if (confirm('Logout?')) {
-                localStorage.removeItem('token');
-                localStorage.removeItem('user');
+                clearLocalSession();
                 location.reload();
             }
+        }
+
+        function clearLocalSession() {
+            currentToken = null;
+            currentUser = null;
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
         }
     </script>
 </body>

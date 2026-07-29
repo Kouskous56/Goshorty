@@ -15,6 +15,9 @@ type User struct {
 	Email     string `json:"email" binding:"required,email"`
 	Role      string `json:"role"`
 	CreatedAt int64  `json:"created_at"`
+	// TokenVersion is persisted but never exposed. Incrementing it revokes all
+	// previously issued tokens for this user.
+	TokenVersion int64 `json:"-"`
 }
 
 // LoginRequest is the login request
@@ -33,6 +36,12 @@ type LoginResponse struct {
 // RegisterRequest is the registration request
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=50"`
-	Password string `json:"password" binding:"required,min=6"`
+	Password string `json:"password" binding:"required"`
 	Email    string `json:"email" binding:"required,email"`
+}
+
+// ChangePasswordRequest is used by an authenticated user to rotate a password.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required"`
 }
