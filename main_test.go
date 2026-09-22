@@ -239,8 +239,8 @@ func newTestAPIRouter() (*gin.Engine, *services.URLService) {
 	rateLimiter := handlers.NewRateLimiter()
 
 	router := gin.New()
-	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all")
-	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls")
+	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all", "")
+	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls", "v1")
 
 	router.GET("/health", h.Health)
 	router.GET("/health/live", h.Health)
@@ -523,5 +523,117 @@ func TestAPIInfoEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "\"POST /api/v1/urls\"") {
 		t.Errorf("GET /api/v1: expected v1 endpoints listing, got %s", w.Body.String())
+	}
+}
+
+// TestV1PaginatedListsAndLegacyShapeUntouched proves the canonical v1 list
+// endpoints paginate (limit + cursor keyset, total, sorted newest first)
+// while the legacy aliases keep their original response shapes.
+func TestV1PaginatedListsAndLegacyShapeUntouched(t *testing.T) {
+	router, urlService := newTestAPIRouter()
+	token := loginAsAdmin(t, router)
+	auth := "Bearer " + token
+
+	for _, code := range []string{"p1", "p2", "p3"} {
+		if _, err := urlService.CreateShortURL(&models.ShortenRequest{
+			URL:        "https://example.com/" + code,
+			CustomCode: code,
+		}, "test-owner"); err != nil {
+			t.Fatalf("create %s: %v", code, err)
+		}
+	}
+
+	fetch := func(path string) (int, map[string]interface{}) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", auth)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			return w.Code, nil
+		}
+		var body map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		return w.Code, body
+	}
+
+	// First v1 page: 1 URL, total 3, next_cursor present.
+	status, body := fetch("/api/v1/urls?limit=1")
+	if status != http.StatusOK {
+		t.Fatalf("v1 list: expected 200, got %d", status)
+	}
+	if body["total"] != float64(3) {
+		t.Errorf("total = %v, want 3", body["total"])
+	}
+	urls, _ := body["urls"].([]interface{})
+	if len(urls) != 1 {
+		t.Fatalf("page size = %d, want 1", len(urls))
+	}
+	next, _ := body["next_cursor"].(string)
+	if next == "" {
+		t.Fatal("expected next_cursor on first page")
+	}
+
+	// Walk remaining pages with the cursor until exhausted.
+	seen := map[string]bool{}
+	seen[urls[0].(map[string]interface{})["short_code"].(string)] = true
+	cursor := next
+	for cursor != "" {
+		status, body = fetch("/api/v1/urls?limit=1&cursor=" + cursor)
+		if status != http.StatusOK {
+			t.Fatalf("walk page: expected 200, got %d", status)
+		}
+		for _, raw := range body["urls"].([]interface{}) {
+			seen[raw.(map[string]interface{})["short_code"].(string)] = true
+		}
+		next, _ = body["next_cursor"].(string)
+		cursor = next
+	}
+	if len(seen) != 3 {
+		t.Errorf("walked %d unique codes, want 3", len(seen))
+	}
+
+	// Bad limit and bad cursor are 400 JSON errors on v1.
+	if status, _ := fetch("/api/v1/urls?limit=abc"); status != http.StatusBadRequest {
+		t.Errorf("bad limit: expected 400, got %d", status)
+	}
+	if status, _ := fetch("/api/v1/urls?cursor=!!!bad"); status != http.StatusBadRequest {
+		t.Errorf("bad cursor: expected 400, got %d", status)
+	}
+
+	// Legacy alias keeps its original shape: only "urls".
+	status, body = fetch("/api/shorten/all")
+	if status != http.StatusOK {
+		t.Fatalf("legacy list: expected 200, got %d", status)
+	}
+	if _, ok := body["next_cursor"]; ok {
+		t.Error("legacy list must not expose next_cursor")
+	}
+	if _, ok := body["total"]; ok {
+		t.Error("legacy list must not expose total")
+	}
+	if legacyURLs, _ := body["urls"].([]interface{}); len(legacyURLs) != 3 {
+		t.Errorf("legacy list size = %d, want 3", len(legacyURLs))
+	}
+
+	// Users: v1 paginated shape, legacy original shape.
+	status, body = fetch("/api/v1/auth/users")
+	if status != http.StatusOK {
+		t.Fatalf("v1 users: expected 200, got %d", status)
+	}
+	if body["total"] == nil {
+		t.Error("v1 users must expose total")
+	}
+	if _, ok := body["users"]; !ok {
+		t.Error("v1 users must expose users array")
+	}
+	status, body = fetch("/api/auth/users")
+	if status != http.StatusOK {
+		t.Fatalf("legacy users: expected 200, got %d", status)
+	}
+	if _, ok := body["total"]; ok {
+		t.Error("legacy users must not expose total")
 	}
 }

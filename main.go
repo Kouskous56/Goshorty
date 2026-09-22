@@ -171,8 +171,10 @@ func main() {
 
 	// Canonical API v1 and legacy /api aliases. Both share the same handlers;
 	// only the URL-management paths differ (/urls on v1, /shorten on legacy).
-	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all")
-	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls")
+	// The v1 surface adds pagination for list endpoints; legacy keeps the
+	// original response shapes.
+	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all", "")
+	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls", "v1")
 
 	// Canonical compact redirect route. Expiration is authoritative in storage,
 	// so it does not need to be encoded into the public URL.
@@ -300,11 +302,11 @@ func registerAPIInfo(router *gin.Engine, version string) {
 				"PUT /api/v1/auth/password":             "Change current user password",
 				"POST /api/v1/auth/revoke":              "Revoke all current-user sessions",
 				"POST /api/v1/urls":                     "Create short URL",
-				"GET /api/v1/urls":                      "List all URLs",
+				"GET /api/v1/urls":                      "List URLs (paginated, newest first)",
 				"GET /api/v1/urls/:code":                "Get URL info",
 				"DELETE /api/v1/urls/:code":             "Delete URL",
 				"GET /api/v1/stats":                     "Get stats",
-				"GET /api/v1/auth/users":                "List users (admin)",
+				"GET /api/v1/auth/users":                "List users (admin, paginated)",
 				"PUT /api/v1/auth/users/:username/role": "Update user role (admin)",
 				"DELETE /api/v1/auth/users/:username":   "Delete user (admin)",
 			},
@@ -317,7 +319,13 @@ func registerAPIInfo(router *gin.Engine, version string) {
 // ("/urls" and "/urls" on v1; "/shorten" and "/shorten/all" on the legacy
 // alias). Both register the same handlers, so the /api/v1 surface is purely
 // additive and all legacy /api routes keep working unchanged.
-func registerAPIGroup(rg *gin.RouterGroup, authHandler *handlers.AuthHandler, h *handlers.Handler, rateLimiter *handlers.RateLimiter, urlPath, listPath string) {
+func registerAPIGroup(rg *gin.RouterGroup, authHandler *handlers.AuthHandler, h *handlers.Handler, rateLimiter *handlers.RateLimiter, urlPath, listPath, apiVersion string) {
+	// Tag every request with the API surface so list handlers can decide
+	// between the paginated canonical behavior (v1) and the legacy shape.
+	rg.Use(func(c *gin.Context) {
+		c.Set("api_version", apiVersion)
+		c.Next()
+	})
 	// Auth routes (no auth required)
 	auth := rg.Group("/auth")
 	{

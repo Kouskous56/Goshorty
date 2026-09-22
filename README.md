@@ -198,6 +198,11 @@ found. Backward-compatible aliases: `GET /s/:code` and
 
 **Endpoint:** `GET /api/v1/urls` (legacy alias: `GET /api/shorten/all`)
 
+Paginated: `limit` (1–200, default 50) and `cursor` (from `next_cursor`)
+query parameters; responds with `next_cursor` and `total`. The legacy alias
+returns the full list without pagination fields. URLs are ordered newest
+first.
+
 **Response:**
 ```json
 {

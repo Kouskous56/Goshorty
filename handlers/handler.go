@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -141,10 +142,39 @@ func (h *Handler) DeleteURL(c *gin.Context) {
 	})
 }
 
-// GetAllURLs handles GET /api/shorten/all
+// GetAllURLs handles the URL list endpoint. On the canonical /api/v1 surface
+// it returns a paginated page (keyset cursor, newest first); the legacy
+// /api/shorten/all alias keeps returning the full sorted list.
 func (h *Handler) GetAllURLs(c *gin.Context) {
 	userID := c.GetString("user_id")
 	role := c.GetString("role")
+
+	if c.GetString("api_version") == "v1" {
+		opts, ok := parseListOptions(c)
+		if !ok {
+			writeError(c, http.StatusBadRequest, "INVALID_LIMIT", "limit must be a positive integer")
+			return
+		}
+		page, err := h.urlService.ListURLs(userID, role, opts)
+		if err != nil {
+			if errors.Is(err, services.ErrInvalidCursor) {
+				writeError(c, http.StatusBadRequest, "INVALID_CURSOR", "cursor is invalid or expired")
+				return
+			}
+			writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list URLs")
+			return
+		}
+		resp := gin.H{
+			"urls":  page.URLs,
+			"total": page.Total,
+		}
+		if page.HasMore {
+			resp["next_cursor"] = page.NextCursor
+		}
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
 	urls, err := h.urlService.GetAllURLs(userID, role)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list URLs")
@@ -153,6 +183,20 @@ func (h *Handler) GetAllURLs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"urls": urls,
 	})
+}
+
+// parseListOptions reads limit and cursor query parameters. ok is false when
+// a supplied limit is not a positive integer.
+func parseListOptions(c *gin.Context) (services.ListOptions, bool) {
+	opts := services.ListOptions{Cursor: c.Query("cursor")}
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return opts, false
+		}
+		opts.Limit = n
+	}
+	return opts, true
 }
 
 // GetStats handles GET /api/stats
