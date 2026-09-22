@@ -228,13 +228,15 @@ jobs:
           go build -trimpath \
             -ldflags "-X main.commit=${GITHUB_SHA} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o goshorty .
-          ./goshorty >goshorty-browser-e2e.log 2>&1 &
+          server_log="$PWD/goshorty-browser-e2e.log"
+          ./goshorty >"$server_log" 2>&1 &
           server_pid=$!
           cleanup() {
             kill "$server_pid" 2>/dev/null || true
             wait "$server_pid" 2>/dev/null || true
             echo "----- GoShorty browser E2E server log -----"
-            tail -n 40 goshorty-browser-e2e.log
+            # Playwright runs from e2e/, so tail via the saved absolute path.
+            tail -n 40 "$server_log" || true
           }
           trap cleanup EXIT
 
