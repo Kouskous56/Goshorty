@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -182,13 +183,46 @@ func validPasswordLength(password string) bool {
 	return length >= 12 && length <= 72
 }
 
-// GetAllUsers returns all users (admin only)
+// GetAllUsers returns users (admin only). On the canonical /api/v1 surface it
+// is paginated and sorted by username; the legacy /api/auth/users alias keeps
+// the same response shape.
 func (ah *AuthHandler) GetAllUsers(c *gin.Context) {
 	users, err := ah.userStorage.GetAllUsers()
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list users")
 		return
 	}
+
+	if c.GetString("api_version") == "v1" {
+		opts, ok := parseListOptions(c)
+		if !ok {
+			writeError(c, http.StatusBadRequest, "INVALID_LIMIT", "limit must be a positive integer")
+			return
+		}
+		page, err := services.PaginateUsers(users, opts)
+		if err != nil {
+			if errors.Is(err, services.ErrInvalidCursor) {
+				writeError(c, http.StatusBadRequest, "INVALID_CURSOR", "cursor is invalid or expired")
+				return
+			}
+			writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list users")
+			return
+		}
+		resp := gin.H{
+			"users": page.Users,
+			"total": page.Total,
+		}
+		if page.HasMore {
+			resp["next_cursor"] = page.NextCursor
+		}
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	// Legacy surface: stable ordering by username, same response shape.
+	sort.SliceStable(users, func(i, j int) bool {
+		return users[i].Username < users[j].Username
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"users": users,
 	})

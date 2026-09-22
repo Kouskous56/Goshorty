@@ -295,19 +295,48 @@ DELETE /api/shorten/linux
 
 ---
 
-### GET `/shorten/all`
-List all URLs.
+### GET `/urls` (`/shorten/all` legacy alias)
+List URLs visible to the caller, newest first (`created_at` DESC, `short_code`
+ASC as a deterministic tie-breaker). The canonical endpoint is paginated; the
+legacy alias returns the full list with the same shape as before.
 
 **Headers:**
 ```
 Authorization: Bearer <token>
 ```
 
-**Special Notes:**
-- Regular users see their own URLs
-- Admins see all URLs in system
+**Query Parameters (canonical `/api/v1/urls` only):**
+| Param | Default | Max | Description |
+|---|---|---|---|
+| `limit` | `50` | `200` | Number of items per page |
+| `cursor` | — | — | Opaque keyset cursor taken from `next_cursor`; omit for the first page |
 
-**Response (200 OK):**
+**Special Notes:**
+- Regular users see their own URLs; admins see all URLs in system
+- `next_cursor` is present only when another page exists
+- A malformed `cursor` returns `400 INVALID_CURSOR`; a non-positive `limit`
+  returns `400 INVALID_LIMIT`
+
+**Response (200 OK) — canonical `/api/v1/urls`:**
+```json
+{
+  "urls": [
+    {
+      "id": "xyz789abc123",
+      "short_code": "linux",
+      "original_url": "https://github.com/torvalds/linux",
+      "expires_in": "24h",
+      "expires_at": "2026-02-17T14:30:00Z",
+      "created_at": "2026-02-16T14:30:00Z",
+      "visits": 5
+    }
+  ],
+  "total": 2,
+  "next_cursor": "eyJjIjoxNzA4MTIzNDU2MDAwMDAwLCJzIjoibGludXgifQ"
+}
+```
+
+**Response (200 OK) — legacy `/api/shorten/all` (unchanged shape):**
 ```json
 {
   "urls": [
@@ -354,14 +383,37 @@ Authorization: Bearer <token>
 ---
 
 ### GET `/auth/users` (Admin)
-List all users in system.
+List all users, sorted by username (`ASC`). The canonical endpoint is
+paginated; the legacy alias returns the full list with the original shape.
 
 **Headers:**
 ```
 Authorization: Bearer <admin_token>
 ```
 
-**Response (200 OK):**
+**Query Parameters (canonical `/api/v1/auth/users` only):**
+| Param | Default | Max | Description |
+|---|---|---|---|
+| `limit` | `50` | `200` | Number of items per page |
+| `cursor` | — | — | Opaque keyset cursor taken from `next_cursor`; omit for the first page |
+
+**Response (200 OK) — canonical `/api/v1/auth/users`:**
+```json
+{
+  "users": [
+    {
+      "id": "admin123",
+      "username": "admin",
+      "email": "admin@goshorty.local",
+      "role": "admin",
+      "created_at": 1708123456
+    }
+  ],
+  "total": 2
+}
+```
+
+**Response (200 OK) — legacy `/api/auth/users` (unchanged shape):**
 ```json
 {
   "users": [
@@ -526,6 +578,38 @@ curl -X PUT http://localhost:8080/api/v1/auth/users/john/role \
 
 ---
 
+## Pagination
+
+List endpoints on the canonical `/api/v1` surface (`GET /api/v1/urls`,
+`GET /api/v1/auth/users`) support **keyset (cursor) pagination**:
+
+- Pass `limit` (1–200, default 50) and, when available, `cursor` from the
+  previous response's `next_cursor`.
+- Responses include `total` (visible items count) and `next_cursor` only when
+  another page exists.
+- Results are sorted deterministically: URLs by `created_at` DESC with
+  `short_code` ASC tie-break; users by `username` ASC.
+- Keyset pagination is stable: items created or expired between page requests
+  do not shift pages the way offset/`page` pagination would.
+- A cursor is opaque and URL-safe; a malformed or expired cursor yields
+  `400 INVALID_CURSOR`.
+
+**Example walk:**
+```
+GET /api/v1/urls?limit=10
+→ { "urls": [...], "total": 27, "next_cursor": "eyJjIjo..." }
+
+GET /api/v1/urls?limit=10&cursor=eyJjIjo...
+→ { "urls": [...], "total": 27, "next_cursor": "eWVsbG93..." }
+
+GET /api/v1/urls?limit=10&cursor=eWVsbG93...
+→ { "urls": [...], "total": 27 }
+```
+
+The legacy aliases (`GET /api/shorten/all`, `GET /api/auth/users`) ignore
+pagination parameters and keep returning the unfiltered list with their
+original response shapes.
+
 ## Rate Limiting
 
 In-memory per-key rate limiting is applied on sensitive endpoints: login,
@@ -599,6 +683,14 @@ All endpoints allow:
 ---
 
 ## Changelog
+
+**v2.2.0 - September 22, 2026**
+- Keyset (cursor) pagination on canonical `GET /api/v1/urls` and
+  `GET /api/v1/auth/users` (`limit` 1–200, default 50, `next_cursor`/`total`)
+- Deterministic ordering: URLs `created_at` DESC with `short_code` ASC
+  tie-break; users by `username` ASC
+- Legacy `/api/shorten/all` and `/api/auth/users` unchanged (full list, same
+  response shapes)
 
 **v2.1.0 - September 22, 2026**
 - Canonical `/api/v1/*` API surface; legacy `/api/*` kept as backward-compatible aliases

@@ -178,13 +178,24 @@ func (s *URLService) DeleteURL(shortCode, userID, role string) error {
 	return nil
 }
 
-// GetAllURLs returns URLs visible to the caller
+// GetAllURLs returns URLs visible to the caller, newest first.
 func (s *URLService) GetAllURLs(userID, role string) ([]*models.URLData, error) {
 	urls, err := s.storage.GetAllFor(userID, role)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list URLs: %w", err)
 	}
+	sortURLs(urls)
 	return urls, nil
+}
+
+// ListURLs returns a single page of URLs visible to the caller, newest first,
+// with a keyset cursor for the next page (see PaginateURLs).
+func (s *URLService) ListURLs(userID, role string, opts ListOptions) (URLPage, error) {
+	urls, err := s.storage.GetAllFor(userID, role)
+	if err != nil {
+		return URLPage{}, fmt.Errorf("failed to list URLs: %w", err)
+	}
+	return PaginateURLs(urls, opts)
 }
 
 // GetStats returns statistics
