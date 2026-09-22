@@ -78,8 +78,14 @@ URL, and verify its redirect.
    A user can also call `POST /api/auth/revoke` to revoke every current session
    without changing the password.
 2. Delete a compromised user to invalidate access immediately.
-3. Rotate `SECRET_KEY` only for global session invalidation; it invalidates all
-   tokens at once and requires every user to sign in again.
+3. Rotate `SECRET_KEY` two ways:
+   - **Smooth rotation (no forced logout):** set the new value in `SECRET_KEY`
+     and the previous value in `SECRET_KEY_PREVIOUS`, redeploy, verify
+     `/ready` and a login, then remove `SECRET_KEY_PREVIOUS` after the desired
+     transition window (old tokens stop verifying once it is gone).
+   - **Emergency global invalidation:** change `SECRET_KEY` without
+     `SECRET_KEY_PREVIOUS`; this invalidates all tokens at once and requires
+     every user to sign in again.
 4. Rotate database credentials in Railway, update the reference, redeploy, and
    verify `/ready`.
 5. Search structured logs by `request_id`; never paste tokens or database URLs

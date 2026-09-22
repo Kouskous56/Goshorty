@@ -403,6 +403,11 @@ Production configuration is provided through environment variables:
 - `PUBLIC_BASE_URL` — canonical public origin for short links.
 - `ADMIN_EMAIL` — optional bootstrap admin email.
 - `TOKEN_TTL` — optional token lifetime, default `24h`.
+- `TOKEN_ISSUER` / `TOKEN_AUDIENCE` — optional claims that bind tokens to the
+  deployment; empty = disabled (backward compatible), enabling invalidates
+  previously issued tokens.
+- `SECRET_KEY_PREVIOUS` — optional previous signing key for smooth key
+  rotation; tokens signed with it keep verifying until the value is removed.
 - `PORT` — listening port; Railway supplies this automatically.
 - `GIN_MODE=release` — enables production mode.
 

@@ -51,10 +51,16 @@ func main() {
 	if gin.Mode() == gin.ReleaseMode && len([]byte(secretKey)) < 32 {
 		log.Fatal("SECRET_KEY must be at least 32 bytes in release mode")
 	}
-	tokenTTL := getEnv("TOKEN_TTL", "24h")
-	ttl, err := time.ParseDuration(tokenTTL)
-	if err == nil {
-		services.TokenTTL = ttl
+	// SECRET_KEY_PREVIOUS enables smooth key rotation: tokens signed with the
+	// previous key keep verifying until it is removed (see OPERATIONS.md).
+	previousSecretKey := os.Getenv("SECRET_KEY_PREVIOUS")
+	if previousSecretKey != "" {
+		if gin.Mode() == gin.ReleaseMode && len([]byte(previousSecretKey)) < 32 {
+			log.Fatal("SECRET_KEY_PREVIOUS must be at least 32 bytes in release mode")
+		}
+		if previousSecretKey == secretKey {
+			log.Fatal("SECRET_KEY_PREVIOUS must differ from SECRET_KEY")
+		}
 	}
 
 	adminPassword := os.Getenv("ADMIN_PASSWORD")
@@ -114,7 +120,12 @@ func main() {
 
 	// Initialize services
 	urlService := services.NewURLService(urlStorage, cfg)
-	tokenService := services.NewTokenService(secretKey)
+	tokenService := services.NewTokenService(secretKey,
+		services.WithTTL(cfg.Security.TokenTTL),
+		services.WithPreviousSecret(previousSecretKey),
+		services.WithIssuer(cfg.Security.TokenIssuer),
+		services.WithAudience(cfg.Security.TokenAudience),
+	)
 
 	// Initialize handlers
 	h := handlers.NewHandlerWithHealth(urlService, healthChecker)

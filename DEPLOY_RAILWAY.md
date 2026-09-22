@@ -88,6 +88,9 @@ graph LR
 | `PUBLIC_BASE_URL` | ✅ **YES** | Domain HTTPS do Railway cấp, ví dụ `https://goshorty.up.railway.app` |
 | `METRICS_TOKEN` | ✅ **YES** | Secret ngẫu nhiên tối thiểu 32 bytes để scrape `/metrics` |
 | `TOKEN_TTL` | No | `24h` (mặc định) |
+| `TOKEN_ISSUER` | No | Optional: bind token theo issuer (để trống = không enforce) |
+| `TOKEN_AUDIENCE` | No | Optional: bind token theo audience (để trống = không enforce) |
+| `SECRET_KEY_PREVIOUS` | No | Optional: key cũ để rotate mượt mà (xem OPERATIONS.md) |
 | `GIN_MODE` | No | `release` (để tắt debug) |
 
 **Cách set**:
@@ -146,7 +149,10 @@ Security-related optional variables:
 | `PUBLIC_BASE_URL` | `http://localhost:8080` | **Bắt buộc**, ví dụ `https://goshorty.up.railway.app` |
 | `BASE_URL` | — | Chỉ giữ để tương thích; `PUBLIC_BASE_URL` được ưu tiên |
 | `PORT` | `8080` | Railway tự set |
-| `TOKEN_TTL` | `24h` | Giữ nguyên |
+| `TOKEN_TTL` | `24h` | Giữ nguyên; sai format giờ fails-fast khi khởi động |
+| `TOKEN_ISSUER` | trống | Để trống = không enforce (backward-compatible); bật lên sẽ invalidate token cũ |
+| `TOKEN_AUDIENCE` | trống | Để trống = không enforce (backward-compatible); bật lên sẽ invalidate token cũ |
+| `SECRET_KEY_PREVIOUS` | trống | Key cũ trong lúc rotate; khi bỏ thì token cũ hết hiệu lực |
 | `METRICS_TOKEN` | empty ở debug | **Bắt buộc** khi `GIN_MODE=release`; không dùng chung với `SECRET_KEY` |
 | `GIN_MODE` | debug | `release` |
 
