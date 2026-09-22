@@ -152,9 +152,12 @@ func main() {
 	}
 	router.StaticFS("/static", http.FS(staticFS))
 
-	// Health check (no auth required)
+	// Health and readiness. /health/live and /health/ready are canonical
+	// aliases; /health and /ready remain as backward-compatible endpoints.
 	router.GET("/health", h.Health)
+	router.GET("/health/live", h.Health)
 	router.GET("/ready", h.Ready)
+	router.GET("/health/ready", h.Ready)
 	router.GET("/metrics", metricsAuthMiddleware(cfg.Security.MetricsToken), metrics.Handler)
 	router.GET("/version", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -166,85 +169,22 @@ func main() {
 
 	rateLimiter := handlers.NewRateLimiter()
 
-	// API v1 routes
-	api := router.Group("/api")
-	{
-		// Auth routes (no auth required)
-		auth := api.Group("/auth")
-		{
-			auth.POST("/login", rateLimiter.Limit("login", 10, time.Minute), authHandler.Login)
-			auth.POST("/register", rateLimiter.Limit("register", 5, time.Hour), authHandler.Register)
-		}
-
-		// Protected routes (auth required)
-		protected := api.Group("")
-		protected.Use(authHandler.AuthMiddleware())
-		{
-			// Current user info
-			protected.GET("/auth/me", authHandler.GetCurrentUser)
-			protected.PUT("/auth/password", rateLimiter.Limit("password", 5, time.Hour), authHandler.ChangePassword)
-			protected.POST("/auth/revoke", rateLimiter.Limit("revoke", 5, time.Hour), authHandler.RevokeSessions)
-
-			// URL shortening (protected)
-			protected.POST("/shorten", rateLimiter.Limit("shorten", 60, time.Minute), h.CreateShortURL)
-			protected.GET("/shorten/:code", h.GetURLInfo)
-			protected.DELETE("/shorten/:code", h.DeleteURL)
-			protected.GET("/shorten/all", h.GetAllURLs)
-			protected.GET("/stats", h.GetStats)
-
-			// Admin routes
-			admin := protected.Group("")
-			admin.Use(handlers.AdminMiddleware())
-			{
-				admin.GET("/auth/users", authHandler.GetAllUsers)
-				admin.PUT("/auth/users/:username/role", authHandler.UpdateUserRole)
-				admin.DELETE("/auth/users/:username", authHandler.DeleteUser)
-			}
-		}
-	}
+	// Canonical API v1 and legacy /api aliases. Both share the same handlers;
+	// only the URL-management paths differ (/urls on v1, /shorten on legacy).
+	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all")
+	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls")
 
 	// Canonical compact redirect route. Expiration is authoritative in storage,
 	// so it does not need to be encoded into the public URL.
-	router.GET("/s/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
+	router.GET("/r/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
 
-	// Legacy redirect route retained so previously issued links keep working.
+	// Backward-compatible redirect aliases so previously issued links keep
+	// working (/s/:code and the legacy /goshorty/:timeout/:code format).
+	router.GET("/s/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
 	router.GET("/goshorty/:timeout/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
 
-	// Root route (API info)
-	router.GET("/api", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"service": "GoShorty - URL Shortener with TTL",
-			"version": version,
-			"features": []string{
-				"URL shortening with auto-expiration",
-				"User authentication",
-				"Admin dashboard",
-				"User management",
-			},
-			"frontend": "/",
-			"endpoints": gin.H{
-				"GET /health":                        "Health check",
-				"GET /ready":                         "PostgreSQL readiness check",
-				"GET /metrics":                       "Prometheus-compatible HTTP metrics",
-				"GET /version":                       "Release build metadata",
-				"GET /s/:code":                       "Redirect to original URL",
-				"GET /goshorty/:timeout/:code":       "Legacy redirect route",
-				"POST /api/auth/login":               "Login user",
-				"POST /api/auth/register":            "Register new user",
-				"GET /api/auth/me":                   "Current user info",
-				"PUT /api/auth/password":             "Change current user password",
-				"POST /api/auth/revoke":              "Revoke all current-user sessions",
-				"POST /api/shorten":                  "Create short URL",
-				"GET /api/shorten/:code":             "Get URL info",
-				"DELETE /api/shorten/:code":          "Delete URL",
-				"GET /api/shorten/all":               "List all URLs",
-				"GET /api/stats":                     "Get stats",
-				"GET /api/auth/users":                "List users (admin)",
-				"PUT /api/auth/users/:username/role": "Update user role (admin)",
-				"DELETE /api/auth/users/:username":   "Delete user (admin)",
-			},
-		})
-	})
+	// API info endpoints.
+	registerAPIInfo(router, version)
 
 	// Serve index.html for all other routes (SPA fallback)
 	router.NoRoute(func(c *gin.Context) {
@@ -305,6 +245,111 @@ func main() {
 
 	closeStorage()
 	log.Println("Server exited cleanly")
+}
+
+// registerAPIInfo mounts the descriptive /api and /api/v1 endpoints.
+func registerAPIInfo(router *gin.Engine, version string) {
+	router.GET("/api", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"service":       "GoShorty - URL Shortener with TTL",
+			"version":       version,
+			"frontend":      "/",
+			"canonical_api": "/api/v1",
+			"endpoints": gin.H{
+				"GET /health":                        "Health check",
+				"GET /health/live":                   "Health check alias",
+				"GET /ready":                         "PostgreSQL readiness check",
+				"GET /health/ready":                  "Readiness check alias",
+				"GET /metrics":                       "Prometheus-compatible HTTP metrics",
+				"GET /version":                       "Release build metadata",
+				"GET /r/:code":                       "Redirect to original URL (canonical)",
+				"GET /s/:code":                       "Legacy redirect alias",
+				"GET /goshorty/:timeout/:code":       "Legacy redirect route",
+				"POST /api/auth/login":               "Login user (legacy alias)",
+				"POST /api/auth/register":            "Register new user (legacy alias)",
+				"GET /api/auth/me":                   "Current user info (legacy alias)",
+				"PUT /api/auth/password":             "Change current user password (legacy alias)",
+				"POST /api/auth/revoke":              "Revoke all current-user sessions (legacy alias)",
+				"POST /api/shorten":                  "Create short URL (legacy alias)",
+				"GET /api/shorten/:code":             "Get URL info (legacy alias)",
+				"DELETE /api/shorten/:code":          "Delete URL (legacy alias)",
+				"GET /api/shorten/all":               "List all URLs (legacy alias)",
+				"GET /api/stats":                     "Get stats (legacy alias)",
+				"GET /api/auth/users":                "List users (admin, legacy alias)",
+				"PUT /api/auth/users/:username/role": "Update user role (admin, legacy alias)",
+				"DELETE /api/auth/users/:username":   "Delete user (admin, legacy alias)",
+			},
+		})
+	})
+	router.GET("/api/v1", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"service":  "GoShorty - URL Shortener with TTL",
+			"version":  version,
+			"frontend": "/",
+			"endpoints": gin.H{
+				"GET /health":                           "Health check",
+				"GET /health/live":                      "Health check alias",
+				"GET /ready":                            "PostgreSQL readiness check",
+				"GET /health/ready":                     "Readiness check alias",
+				"GET /metrics":                          "Prometheus-compatible HTTP metrics",
+				"GET /version":                          "Release build metadata",
+				"GET /r/:code":                          "Redirect to original URL (canonical)",
+				"POST /api/v1/auth/login":               "Login user",
+				"POST /api/v1/auth/register":            "Register new user",
+				"GET /api/v1/auth/me":                   "Current user info",
+				"PUT /api/v1/auth/password":             "Change current user password",
+				"POST /api/v1/auth/revoke":              "Revoke all current-user sessions",
+				"POST /api/v1/urls":                     "Create short URL",
+				"GET /api/v1/urls":                      "List all URLs",
+				"GET /api/v1/urls/:code":                "Get URL info",
+				"DELETE /api/v1/urls/:code":             "Delete URL",
+				"GET /api/v1/stats":                     "Get stats",
+				"GET /api/v1/auth/users":                "List users (admin)",
+				"PUT /api/v1/auth/users/:username/role": "Update user role (admin)",
+				"DELETE /api/v1/auth/users/:username":   "Delete user (admin)",
+			},
+		})
+	})
+}
+
+// registerAPIGroup wires the auth and URL routes into a router group.
+// urlPath is the URL-management base and listPath its collection route
+// ("/urls" and "/urls" on v1; "/shorten" and "/shorten/all" on the legacy
+// alias). Both register the same handlers, so the /api/v1 surface is purely
+// additive and all legacy /api routes keep working unchanged.
+func registerAPIGroup(rg *gin.RouterGroup, authHandler *handlers.AuthHandler, h *handlers.Handler, rateLimiter *handlers.RateLimiter, urlPath, listPath string) {
+	// Auth routes (no auth required)
+	auth := rg.Group("/auth")
+	{
+		auth.POST("/login", rateLimiter.Limit("login", 10, time.Minute), authHandler.Login)
+		auth.POST("/register", rateLimiter.Limit("register", 5, time.Hour), authHandler.Register)
+	}
+
+	// Protected routes (auth required)
+	protected := rg.Group("")
+	protected.Use(authHandler.AuthMiddleware())
+	{
+		// Current user info
+		protected.GET("/auth/me", authHandler.GetCurrentUser)
+		protected.PUT("/auth/password", rateLimiter.Limit("password", 5, time.Hour), authHandler.ChangePassword)
+		protected.POST("/auth/revoke", rateLimiter.Limit("revoke", 5, time.Hour), authHandler.RevokeSessions)
+
+		// URL management
+		protected.POST(urlPath, rateLimiter.Limit("shorten", 60, time.Minute), h.CreateShortURL)
+		protected.GET(urlPath+"/:code", h.GetURLInfo)
+		protected.DELETE(urlPath+"/:code", h.DeleteURL)
+		protected.GET(listPath, h.GetAllURLs)
+		protected.GET("/stats", h.GetStats)
+
+		// Admin routes
+		admin := protected.Group("")
+		admin.Use(handlers.AdminMiddleware())
+		{
+			admin.GET("/auth/users", authHandler.GetAllUsers)
+			admin.PUT("/auth/users/:username/role", authHandler.UpdateUserRole)
+			admin.DELETE("/auth/users/:username", authHandler.DeleteUser)
+		}
+	}
 }
 
 // getEnv returns environment variable value or fallback default

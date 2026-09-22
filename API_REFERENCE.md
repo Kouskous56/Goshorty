@@ -1,23 +1,38 @@
 # API Complete Reference
 
+## API versioning
+
+`/api/v1/*` is the canonical API surface. The legacy `/api/*` routes remain
+fully functional as deprecated aliases for backward compatibility and are
+labelled *legacy* below. New integrations should target `/api/v1`.
+
+The canonical short-link redirect is `/r/:code` (the format returned on
+creation). `/s/:code` and `/goshorty/:timeout/:code` continue to work so
+previously issued links never break.
+
 ## Production operational endpoints
 
 | Method | Path | Authentication | Purpose |
 |---|---|---|---|
 | `GET` | `/health` | Public | Process liveness |
+| `GET` | `/health/live` | Public | Process liveness (canonical alias) |
 | `GET` | `/ready` | Public | Database readiness |
+| `GET` | `/health/ready` | Public | Database readiness (canonical alias) |
 | `GET` | `/version` | Public | Version, commit and build timestamp |
 | `GET` | `/metrics` | `Bearer METRICS_TOKEN` in release | Prometheus metrics |
-| `POST` | `/api/auth/revoke` | User bearer token | Revoke every session for the current user |
+| `POST` | `/api/v1/auth/revoke` | User bearer token | Revoke every session for the current user |
 
-`POST /api/auth/revoke` invalidates the token used for the request as well as
+`POST /api/v1/auth/revoke` invalidates the token used for the request as well as
 all other tokens previously issued to that user. The next protected request
-with an old token returns HTTP 401.
+with an old token returns HTTP 401. The legacy `POST /api/auth/revoke` alias
+behaves identically.
 
 ## Base URL
 ```
-http://goshorty.localhost:8080/api
+http://goshorty.localhost:8080/api/v1
 ```
+
+The legacy API lives under `http://goshorty.localhost:8080/api`.
 
 ## Authentication
 All endpoints (except `/auth/login` and `/auth/register`) require:
@@ -29,35 +44,49 @@ Where `<token>` is obtained from login or register.
 
 ## Endpoints Summary
 
+Paths below are canonical `/api/v1/...`; each also works at its legacy alias
+(shown in parentheses) with identical behavior.
+
 ### Authentication (No Auth Required)
 
-| Method | Endpoint | Purpose | Auth |
+| Method | Endpoint (legacy alias) | Purpose | Auth |
 |--------|----------|---------|------|
-| POST | `/auth/register` | Register new user | ❌ No |
-| POST | `/auth/login` | Login user | ❌ No |
-| GET | `/auth/me` | Current user info | ✅ Yes |
+| POST | `/api/v1/auth/register` (`/api/auth/register`) | Register new user | ❌ No |
+| POST | `/api/v1/auth/login` (`/api/auth/login`) | Login user | ❌ No |
+| GET | `/api/v1/auth/me` (`/api/auth/me`) | Current user info | ✅ Yes |
 
 ### URL Management (Auth Required)
 
-| Method | Endpoint | Purpose | Auth | Role |
+| Method | Endpoint (legacy alias) | Purpose | Auth | Role |
 |--------|----------|---------|------|------|
-| POST | `/shorten` | Create short URL | ✅ | Any |
-| GET | `/shorten/:code` | Get URL info | ✅ | Any |
-| DELETE | `/shorten/:code` | Delete URL | ✅ | Any |
-| GET | `/shorten/all` | List all URLs | ✅ | Any |
-| GET | `/stats` | Get stats | ✅ | Any |
+| POST | `/api/v1/urls` (`/api/shorten`) | Create short URL | ✅ | Any |
+| GET | `/api/v1/urls/:code` (`/api/shorten/:code`) | Get URL info | ✅ | Any |
+| DELETE | `/api/v1/urls/:code` (`/api/shorten/:code`) | Delete URL | ✅ | Any |
+| GET | `/api/v1/urls` (`/api/shorten/all`) | List all URLs | ✅ | Any |
+| GET | `/api/v1/stats` (`/api/stats`) | Get stats | ✅ | Any |
 
 ### User Management (Admin Only)
 
-| Method | Endpoint | Purpose | Auth | Role |
+| Method | Endpoint (legacy alias) | Purpose | Auth | Role |
 |--------|----------|---------|------|------|
-| GET | `/auth/users` | List all users | ✅ | Admin |
-| PUT | `/auth/users/:username/role` | Update user role | ✅ | Admin |
-| DELETE | `/auth/users/:username` | Delete user | ✅ | Admin |
+| GET | `/api/v1/auth/users` (`/api/auth/users`) | List all users | ✅ | Admin |
+| PUT | `/api/v1/auth/users/:username/role` (`/api/auth/users/:username/role`) | Update user role | ✅ | Admin |
+| DELETE | `/api/v1/auth/users/:username` (`/api/auth/users/:username`) | Delete user | ✅ | Admin |
+
+### Redirect (Public)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/r/:code` | Canonical redirect to original URL |
+| GET | `/s/:code` | Legacy redirect alias |
+| GET | `/goshorty/:timeout/:code` | Legacy redirect route (backward compatible) |
 
 ---
 
 ## Detailed Endpoint Documentation
+
+Paths and request/response shapes below are identical on `/api/v1` and on the
+legacy `/api` aliases.
 
 ### POST `/auth/register`
 Register a new user account.
@@ -188,7 +217,7 @@ Content-Type: application/json
 ```json
 {
   "id": "xyz789abc123",
-  "short_url": "http://goshorty.localhost:8080/s/linux",
+  "short_url": "http://goshorty.localhost:8080/r/linux",
   "short_code": "linux",
   "original_url": "https://github.com/torvalds/linux",
   "expires_in": "24h",
@@ -405,28 +434,32 @@ Authorization: Bearer <admin_token>
 
 ---
 
-### GET `/goshorty/:timeout/:code` (Public)
-Redirect to original URL. **No authentication required.**
+### GET `/r/:code` (Public)
+Canonical redirect to original URL. **No authentication required.**
 
 **URL:**
 ```
-GET /goshorty/24h/linux
+GET /r/linux
 ```
 
+**Backward-compatible aliases:**
+- `GET /s/linux`
+- `GET /goshorty/24h/linux` (legacy format)
+
 **Response:**
-- 301 Redirect to original URL
+- 302 Redirect to original URL
 - Increments visit counter
 - Returns 404 if expired or not found
 
 **Example Flow:**
 ```
-Request:  GET /goshorty/24h/linux
+Request:  GET /r/linux
 ↓
 Server checks if "linux" exists and not expired
 ↓
 Increments visit count
 ↓
-Response: 301 Moved Permanently
+Response: 302 Found
 Location: https://github.com/torvalds/linux
 ↓
 Browser follows redirect
@@ -461,18 +494,18 @@ TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   -d '{"username":"john","password":"pass"}' \
   | jq -r '.token')
 
-# 2. Create short URL
-curl -X POST http://localhost:8080/api/shorten \
+# 2. Create short URL (canonical v1 endpoint)
+curl -X POST http://localhost:8080/api/v1/urls \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"url":"https://github.com","expires_in":"7d","custom_code":"github"}'
 
-# 3. Share the short URL
-echo "Share this: http://localhost:8080/goshorty/7d/github"
+# 3. Share the short URL (canonical redirect format)
+echo "Share this: http://localhost:8080/r/github"
 
 # 4. View stats
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/stats
+  http://localhost:8080/api/v1/stats
 ```
 
 ### Admin Task: Promote User to Admin
@@ -485,7 +518,7 @@ ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   | jq -r '.token')
 
 # Promote john to admin
-curl -X PUT http://localhost:8080/api/auth/users/john/role \
+curl -X PUT http://localhost:8080/api/v1/auth/users/john/role \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"role":"admin"}'
@@ -495,30 +528,36 @@ curl -X PUT http://localhost:8080/api/auth/users/john/role \
 
 ## Rate Limiting
 
-Currently **no rate limiting** implemented (for development).
-
-For production, add:
-- Per-IP rate limiting
-- Per-user rate limiting
-- Anti-bot measures
+In-memory per-key rate limiting is applied on sensitive endpoints: login,
+register, password change, session revocation, URL creation and redirects.
+Limits are defined in `main.go` (for example login 10/min, register 5/hour,
+shorten 60/min, redirect 300/min).
 
 ---
 
 ## Token Format
 
-Tokens are JSON encoded (simplified JWT):
+Tokens use the self-defined `base64url(payload).base64url(signature)` format
+signed with HMAC-SHA256. The payload contains:
 
 ```json
 {
+  "jti": "ab12cd34ef56",
   "user_id": "abc123def456",
   "username": "john",
   "role": "user",
+  "token_version": 0,
+  "iss": "",
+  "aud": "",
+  "kid": "v1",
   "issued_at": 1708123456,
   "expires_at": 1708209856
 }
 ```
 
-**Token Expiration:** 24 hours from issue date
+**Token Expiration:** `TOKEN_TTL` (default 24 hours) from issue date. See
+`SECURITY.md` ("Token format and hardening") for verification rules and key
+rotation.
 
 ---
 
@@ -560,6 +599,11 @@ All endpoints allow:
 ---
 
 ## Changelog
+
+**v2.1.0 - September 22, 2026**
+- Canonical `/api/v1/*` API surface; legacy `/api/*` kept as backward-compatible aliases
+- Canonical redirect `/r/:code`; `/s/:code` and `/goshorty/:timeout/:code` retained
+- `/health/live` and `/health/ready` canonical health aliases (`/health`, `/ready` unchanged)
 
 **v2.0.0 - February 16, 2026**
 - Added complete authentication system
