@@ -173,8 +173,8 @@ func main() {
 	// only the URL-management paths differ (/urls on v1, /shorten on legacy).
 	// The v1 surface adds pagination for list endpoints; legacy keeps the
 	// original response shapes.
-	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all", "")
-	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls", "v1")
+	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/shorten", "/shorten/all", "")
+	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/urls", "/urls", "v1")
 
 	// Canonical compact redirect route. Expiration is authoritative in storage,
 	// so it does not need to be encoded into the public URL.
@@ -324,7 +324,7 @@ func registerAPIInfo(router *gin.Engine, version string) {
 // ("/urls" and "/urls" on v1; "/shorten" and "/shorten/all" on the legacy
 // alias). Both register the same handlers, so the /api/v1 surface is purely
 // additive and all legacy /api routes keep working unchanged.
-func registerAPIGroup(rg *gin.RouterGroup, authHandler *handlers.AuthHandler, h *handlers.Handler, rateLimiter *handlers.RateLimiter, urlPath, listPath, apiVersion string) {
+func registerAPIGroup(rg *gin.RouterGroup, authHandler *handlers.AuthHandler, h *handlers.Handler, rateLimiter *handlers.RateLimiter, registerLimit int, urlPath, listPath, apiVersion string) {
 	// Tag every request with the API surface so list handlers can decide
 	// between the paginated canonical behavior (v1) and the legacy shape.
 	rg.Use(func(c *gin.Context) {
@@ -335,7 +335,7 @@ func registerAPIGroup(rg *gin.RouterGroup, authHandler *handlers.AuthHandler, h 
 	auth := rg.Group("/auth")
 	{
 		auth.POST("/login", rateLimiter.Limit("login", 10, time.Minute), authHandler.Login)
-		auth.POST("/register", rateLimiter.Limit("register", 5, time.Hour), authHandler.Register)
+		auth.POST("/register", rateLimiter.Limit("register", registerLimit, time.Hour), authHandler.Register)
 	}
 
 	// Protected routes (auth required)

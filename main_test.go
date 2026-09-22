@@ -240,8 +240,8 @@ func newTestAPIRouter() (*gin.Engine, *services.URLService) {
 	rateLimiter := handlers.NewRateLimiter()
 
 	router := gin.New()
-	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all", "")
-	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls", "v1")
+	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/shorten", "/shorten/all", "")
+	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/urls", "/urls", "v1")
 
 	// Embedded static assets, mirrored from prod wiring.
 	staticFS, err := fs.Sub(staticFiles, "static")

@@ -37,3 +37,9 @@ storage-coverage.out
 # Local database state (when bind mounts are used)
 .data/
 backups/
+
+# Playwright browser E2E
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,13 +31,14 @@ type DatabaseConfig struct {
 
 // SecurityConfig holds browser, reverse-proxy trust, and token settings.
 type SecurityConfig struct {
-	AllowedOrigins  []string
-	TrustedProxies  []string
-	MaxRequestBytes int64
-	MetricsToken    string
-	TokenTTL        time.Duration
-	TokenIssuer     string
-	TokenAudience   string
+	AllowedOrigins       []string
+	TrustedProxies       []string
+	MaxRequestBytes      int64
+	MetricsToken         string
+	TokenTTL             time.Duration
+	TokenIssuer          string
+	TokenAudience        string
+	RegisterLimitPerHour int
 }
 
 // TTLConfig holds TTL duration settings
@@ -77,13 +79,14 @@ func NewConfig() *Config {
 			URL: os.Getenv("DATABASE_URL"),
 		},
 		Security: SecurityConfig{
-			AllowedOrigins:  listFromEnv("ALLOWED_ORIGINS", baseURL),
-			TrustedProxies:  listFromEnv("TRUSTED_PROXIES", "100.64.0.0/10"),
-			MaxRequestBytes: 1 << 20,
-			MetricsToken:    os.Getenv("METRICS_TOKEN"),
-			TokenTTL:        tokenTTLFromEnv(),
-			TokenIssuer:     os.Getenv("TOKEN_ISSUER"),
-			TokenAudience:   os.Getenv("TOKEN_AUDIENCE"),
+			AllowedOrigins:       listFromEnv("ALLOWED_ORIGINS", baseURL),
+			TrustedProxies:       listFromEnv("TRUSTED_PROXIES", "100.64.0.0/10"),
+			MaxRequestBytes:      1 << 20,
+			MetricsToken:         os.Getenv("METRICS_TOKEN"),
+			TokenTTL:             tokenTTLFromEnv(),
+			TokenIssuer:          os.Getenv("TOKEN_ISSUER"),
+			TokenAudience:        os.Getenv("TOKEN_AUDIENCE"),
+			RegisterLimitPerHour: intFromEnv("REGISTER_LIMIT_PER_HOUR", 5),
 		},
 		TTL: TTLConfig{
 			Options: map[string]time.Duration{
@@ -123,6 +126,19 @@ func tokenTTLFromEnv() time.Duration {
 	return 24 * time.Hour
 }
 
+// intFromEnv parses key as a non-negative integer, defaulting to fallback on
+// empty or malformed values. A valid zero is accepted by the parser but
+// rejected by Validate so an operator cannot accidentally disable
+// registration.
+func intFromEnv(key string, fallback int) int {
+	if raw := os.Getenv(key); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			return parsed
+		}
+	}
+	return fallback
+}
+
 // Validate verifies configuration values that affect externally visible URLs.
 func (c *Config) Validate() error {
 	if c == nil {
@@ -160,6 +176,9 @@ func (c *Config) Validate() error {
 	}
 	if err := validateLabel(c.Security.TokenAudience, "TOKEN_AUDIENCE"); err != nil {
 		return err
+	}
+	if c.Security.RegisterLimitPerHour < 1 {
+		return fmt.Errorf("REGISTER_LIMIT_PER_HOUR must be at least 1")
 	}
 	return nil
 }

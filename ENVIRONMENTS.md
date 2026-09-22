@@ -164,6 +164,7 @@ Recommended:
 | `SECRET_KEY_PREVIOUS` | empty — previous signing key for smooth rotation |
 | `ALLOWED_ORIGINS` | `PUBLIC_BASE_URL` |
 | `TRUSTED_PROXIES` | `100.64.0.0/10` |
+| `REGISTER_LIMIT_PER_HOUR` | `5` — per-IP registration budget per hour (raise it for test/CI suites, e.g. 50) |
 
 Railway supplies `PORT`.
 

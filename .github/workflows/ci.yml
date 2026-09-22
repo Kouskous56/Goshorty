@@ -175,3 +175,91 @@ jobs:
           done
 
           bash scripts/e2e.sh http://127.0.0.1:8080
+
+  browser-e2e:
+    name: Browser E2E (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SECRET_KEY: ci-only-signing-key-that-is-not-used-in-production
+      ADMIN_PASSWORD: ci-admin-password-rotate-me
+      ADMIN_EMAIL: admin@ci.local
+      PUBLIC_BASE_URL: http://127.0.0.1:8080
+      ALLOWED_ORIGINS: http://127.0.0.1:8080
+      TRUSTED_PROXIES: 127.0.0.1
+      TOKEN_TTL: 15m
+      # Plenty of headroom for the 3 registrations per run (plus Playwright
+      # retries); keeps the browser suite deterministic without weakening the
+      # production default of 5/hour.
+      REGISTER_LIMIT_PER_HOUR: 50
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.8"
+          cache-dependency-path: go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install npm dependencies
+        run: npm ci
+        working-directory: e2e
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: e2e
+
+      # Build the real binary and run it against the in-memory development
+      # storage (no DATABASE_URL / GIN_MODE=release, so it cannot fatal), then
+      # exercise the SPA from a real browser. API-level E2E with PostgreSQL is
+      # covered by the postgres-e2e job above.
+      - name: Build and run GoShorty, then run browser E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -trimpath \
+            -ldflags "-X main.commit=${GITHUB_SHA} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o goshorty .
+          ./goshorty >goshorty-browser-e2e.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            echo "----- GoShorty browser E2E server log -----"
+            tail -n 40 goshorty-browser-e2e.log
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/ready >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "GoShorty exited before becoming ready"
+              exit 1
+            fi
+            if test "$attempt" -eq 30; then
+              echo "GoShorty did not become ready in time"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          cd e2e
+          npx playwright test --project=chromium
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7

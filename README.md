@@ -52,6 +52,11 @@ GoShorty/
 │   ├── index.html        # SPA markup (no inline script/style)
 │   ├── css/style.css     # SPA stylesheet
 │   └── js/app.js         # SPA logic — canonical /api/v1, session restore
+├── e2e/
+│   ├── package.json        # Playwright dependency + scripts (pinned version)
+│   ├── playwright.config.ts # chromium (CI) + local-chrome projects
+│   └── tests/
+│       └── spa.spec.ts     # SPA happy path + session-restore specs
 └── README.md             # This file
 ```
 
@@ -350,7 +355,7 @@ console.log(data.short_url);
 ### Production security
 
 - Login: 10 requests/minute/IP
-- Registration: 5 requests/hour/IP
+- Registration: 5 requests/hour/IP (configurable via `REGISTER_LIMIT_PER_HOUR`)
 - Password changes: 5 requests/hour/IP
 - URL creation: 60 requests/minute/IP
 - Redirects: 300 requests/minute/IP
