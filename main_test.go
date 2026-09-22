@@ -9,6 +9,7 @@ import (
 	"goshorty/models"
 	"goshorty/services"
 	"goshorty/storage"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -241,6 +242,13 @@ func newTestAPIRouter() (*gin.Engine, *services.URLService) {
 	router := gin.New()
 	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all", "")
 	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls", "v1")
+
+	// Embedded static assets, mirrored from prod wiring.
+	staticFS, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		panic(err)
+	}
+	router.StaticFS("/static", http.FS(staticFS))
 
 	router.GET("/health", h.Health)
 	router.GET("/health/live", h.Health)

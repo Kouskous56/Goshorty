@@ -10,7 +10,7 @@ import (
 func securityHeadersMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		headers := c.Writer.Header()
-		headers.Set("Content-Security-Policy", "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data:; connect-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'")
+		headers.Set("Content-Security-Policy", "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data:; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'")
 		headers.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		headers.Set("X-Content-Type-Options", "nosniff")
 		headers.Set("X-Frame-Options", "DENY")
