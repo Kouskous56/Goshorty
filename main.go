@@ -188,6 +188,9 @@ func main() {
 	// API info endpoints.
 	registerAPIInfo(router, version)
 
+	// OpenAPI 3.1 specification (embedded JSON document).
+	registerOpenAPI(router)
+
 	// Serve index.html for all other routes (SPA fallback)
 	router.NoRoute(func(c *gin.Context) {
 		// For API requests, return 404
@@ -280,6 +283,7 @@ func registerAPIInfo(router *gin.Engine, version string) {
 				"GET /api/auth/users":                "List users (admin, legacy alias)",
 				"PUT /api/auth/users/:username/role": "Update user role (admin, legacy alias)",
 				"DELETE /api/auth/users/:username":   "Delete user (admin, legacy alias)",
+				"GET /api/v1/openapi.json":           "OpenAPI 3.1 specification (JSON)",
 			},
 		})
 	})
@@ -309,6 +313,7 @@ func registerAPIInfo(router *gin.Engine, version string) {
 				"GET /api/v1/auth/users":                "List users (admin, paginated)",
 				"PUT /api/v1/auth/users/:username/role": "Update user role (admin)",
 				"DELETE /api/v1/auth/users/:username":   "Delete user (admin)",
+				"GET /api/v1/openapi.json":              "OpenAPI 3.1 specification (JSON)",
 			},
 		})
 	})

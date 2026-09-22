@@ -10,6 +10,10 @@ The canonical short-link redirect is `/r/:code` (the format returned on
 creation). `/s/:code` and `/goshorty/:timeout/:code` continue to work so
 previously issued links never break.
 
+The whole API is also described in machine-readable form: `GET /api/v1/openapi.json`
+returns the OpenAPI 3.1 document covering the canonical surface, the operational
+endpoints, the public redirects and the legacy aliases (marked `deprecated`).
+
 ## Production operational endpoints
 
 | Method | Path | Authentication | Purpose |
@@ -20,6 +24,7 @@ previously issued links never break.
 | `GET` | `/health/ready` | Public | Database readiness (canonical alias) |
 | `GET` | `/version` | Public | Version, commit and build timestamp |
 | `GET` | `/metrics` | `Bearer METRICS_TOKEN` in release | Prometheus metrics |
+| `GET` | `/api/v1/openapi.json` | Public | OpenAPI 3.1 specification (JSON) |
 | `POST` | `/api/v1/auth/revoke` | User bearer token | Revoke every session for the current user |
 
 `POST /api/v1/auth/revoke` invalidates the token used for the request as well as
@@ -683,6 +688,13 @@ All endpoints allow:
 ---
 
 ## Changelog
+
+**v2.3.0 - September 22, 2026**
+- Machine-readable API description: `GET /api/v1/openapi.json` serves a
+  full OpenAPI 3.1 specification (embedded JSON, no extra dependencies)
+- Spec covers the canonical `/api/v1` surface, operational endpoints, public
+  redirects and legacy `/api` aliases (marked `deprecated`); validated by
+  tests asserting path coverage, operation responses and `$ref` resolution
 
 **v2.2.0 - September 22, 2026**
 - Keyset (cursor) pagination on canonical `GET /api/v1/urls` and

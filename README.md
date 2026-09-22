@@ -124,6 +124,10 @@ redirect format is `/r/:code` (`/s/:code` and `/goshorty/:timeout/:code`
 still work). See [API_REFERENCE.md](API_REFERENCE.md) for the complete
 reference.
 
+A machine-readable OpenAPI 3.1 description of the full surface is served at
+`GET /api/v1/openapi.json` (JSON); run the server to view it
+(`http://localhost:8080/api/v1/openapi.json`).
+
 ### Create Short URL
 
 **Endpoint:** `POST /api/v1/urls` (legacy alias: `POST /api/shorten`)
