@@ -25,7 +25,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache-dependency-path: go.sum
 
       - name: Verify module files
@@ -55,9 +55,16 @@ jobs:
         uses: golang/govulncheck-action@v1
         with:
           repo-checkout: false
-          go-version-input: "1.26.5"
+          go-version-input: "1.26.8"
           cache: false
           go-package: ./...
+
+      - name: Generate and upload SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          file: ./dist/goshorty
+          format: spdx-json
+          artifact-name: goshorty-sbom
 
       - name: Publish coverage summary
         if: always()
@@ -82,7 +89,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache-dependency-path: go.sum
 
       - name: Run race detector
@@ -127,7 +134,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache-dependency-path: go.sum
 
       - name: Run PostgreSQL integration tests

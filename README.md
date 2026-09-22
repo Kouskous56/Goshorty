@@ -1,5 +1,9 @@
 # GoShorty - URL Shortener with TTL
 
+Current release: **v3.0.0**. The canonical local address is
+`http://goshorty.localhost:8080`; public deployments use the hostname supplied
+through `PUBLIC_BASE_URL`.
+
 A production-ready URL shortener service built with Go, featuring automatic expiration (TTL) support with configurable time windows from 5 minutes to 7 days.
 
 ## Features
@@ -90,7 +94,9 @@ go run .
 SECRET_KEY="development-secret-change-me" go run .
 ```
 
-The server will start on `http://localhost:8080`
+The server will start on `http://goshorty.localhost:8080` when using the
+generated local environment. `http://localhost:8080` remains usable for direct
+access.
 
 ## Quality gate
 

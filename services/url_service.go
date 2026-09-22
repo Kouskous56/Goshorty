@@ -114,7 +114,7 @@ func (s *URLService) CreateShortURL(req *models.ShortenRequest, userID string) (
 
 	response := &models.ShortenResponse{
 		ID:          urlData.ID,
-		ShortURL:    fmt.Sprintf("%s/goshorty/%s/%s", s.config.Server.BaseURL, expiresInDisplay, shortCode),
+		ShortURL:    fmt.Sprintf("%s/s/%s", s.config.Server.BaseURL, shortCode),
 		ShortCode:   shortCode,
 		OriginalURL: req.URL,
 		ExpiresIn:   expiresInDisplay,

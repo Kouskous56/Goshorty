@@ -16,7 +16,7 @@ with an old token returns HTTP 401.
 
 ## Base URL
 ```
-http://localhost:8080/api
+http://goshorty.localhost:8080/api
 ```
 
 ## Authentication
@@ -188,7 +188,7 @@ Content-Type: application/json
 ```json
 {
   "id": "xyz789abc123",
-  "short_url": "http://localhost:8080/goshorty/24h/linux",
+  "short_url": "http://goshorty.localhost:8080/s/linux",
   "short_code": "linux",
   "original_url": "https://github.com/torvalds/linux",
   "expires_in": "24h",

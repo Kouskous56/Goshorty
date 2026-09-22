@@ -1,6 +1,32 @@
 name: goshorty
 
 services:
+  app:
+    build:
+      context: .
+      args:
+        VERSION: ${APP_VERSION:-3.0.0}
+        COMMIT: ${APP_COMMIT:-local}
+        BUILD_TIME: ${APP_BUILD_TIME:-local}
+    restart: unless-stopped
+    environment:
+      GIN_MODE: ${GIN_MODE:-debug}
+      PORT: 8080
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://goshorty.localhost:8080}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://goshorty.localhost:8080}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1,::1}
+      TOKEN_TTL: ${TOKEN_TTL:-24h}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@goshorty.localhost}
+      DATABASE_URL: postgres://${POSTGRES_USER:-goshorty}:${POSTGRES_PASSWORD:-goshorty-local-password}@postgres:5432/${POSTGRES_DB:-goshorty}?sslmode=disable
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped

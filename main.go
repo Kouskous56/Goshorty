@@ -192,7 +192,11 @@ func main() {
 		}
 	}
 
-	// Redirect route - handles goshorty/[timeout]/[code]
+	// Canonical compact redirect route. Expiration is authoritative in storage,
+	// so it does not need to be encoded into the public URL.
+	router.GET("/s/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
+
+	// Legacy redirect route retained so previously issued links keep working.
 	router.GET("/goshorty/:timeout/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
 
 	// Root route (API info)
@@ -212,7 +216,8 @@ func main() {
 				"GET /ready":                         "PostgreSQL readiness check",
 				"GET /metrics":                       "Prometheus-compatible HTTP metrics",
 				"GET /version":                       "Release build metadata",
-				"GET /goshorty/:timeout/:code":       "Redirect to original URL",
+				"GET /s/:code":                       "Redirect to original URL",
+				"GET /goshorty/:timeout/:code":       "Legacy redirect route",
 				"POST /api/auth/login":               "Login user",
 				"POST /api/auth/register":            "Register new user",
 				"GET /api/auth/me":                   "Current user info",

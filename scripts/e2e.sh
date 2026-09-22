@@ -68,7 +68,7 @@ jq -e --arg target "$target" '.original_url == $target and .visits == 0' "$work_
 
 echo "Checking redirect and visit statistics"
 redirect_status="$(curl -sS -o /dev/null -D "$work_dir/headers" --max-redirs 0 \
-	-w "%{http_code}" "$base_url/goshorty/24h/$code")"
+	-w "%{http_code}" "$base_url/s/$code")"
 expect_status "$redirect_status" 302 "redirect"
 grep -qi "^Location: ${target}" "$work_dir/headers"
 

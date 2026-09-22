@@ -51,3 +51,56 @@ headers, and database URLs.
 Do not include live tokens, passwords, `SECRET_KEY`, or credential-bearing
 database URLs in reports. Provide the affected route, timestamp, deployment
 revision, and `X-Request-ID`.
+
+## Dependency vulnerability posture
+
+Baseline scan on 2026-09-22 with `govulncheck` v1.8.0 (Go 1.27.0, `vuln.go.dev`
+database last modified 2026-09-16), run in both source (`./...`) and binary
+modes. Result: **exit 0 — 0 reachable (called) vulnerabilities**. The scan
+reported 41 finding instances covering **32 unique advisories**, all in
+packages outside the exercised call graph (bcrypt, Gin, pgx).
+
+| Module in build | Unique advisories | Notable advisories | Fix | Latest |
+|---|---|---|---|---|
+| `golang.org/x/crypto` v0.36.0 | 20 | CVE-2026-39830<sup>1</sup>, CVE-2026-39827, CVE-2026-39828, CVE-2026-39829, CVE-2026-39831…39835, CVE-2025-47913, CVE-2025-47914, CVE-2025-58181, CVE-2026-56854, CVE-2026-56855, GO-2026-5932 (openpgp deprecated/unsafe) | v0.52.0–v0.56.0 | v0.57.0 |
+| `golang.org/x/net` v0.38.0 | 10 | CVE-2026-25680, CVE-2026-25681, CVE-2026-27136 (html), CVE-2026-33814 (http2), CVE-2026-46600 (dns/dnsmessage) | v0.45.0–v0.56.0 | v0.59.0 |
+| `golang.org/x/sys` v0.31.0 | 1 | CVE-2026-39824 (`windows.NewNTUnicodeString`) | v0.44.0 | v0.48.0 |
+| `google.golang.org/protobuf` v1.30.0 | 1 | CVE-2024-24786 (JSON unmarshal loop) | v1.33.0 | v1.36.12 |
+
+<sup>1</sup> The severe SSH cluster (CVE-2026-39827…39835 incl. the critical
+CVE-2026-39830 deadlock) lives in `golang.org/x/crypto/ssh`, `ssh/agent`, and
+`ssh/knownhosts`. GoShorty imports only `golang.org/x/crypto/bcrypt`, so these
+symbols are unreachable; the cluster is still fixed in T2 to keep the tree
+clean for future code.
+
+### Standard library (toolchain)
+
+The first CI run on this baseline also scanned the pinned toolchain's
+standard library. Go 1.26.5 was affected by four reachable advisories, all
+fixed in `go1.26.6`:
+
+| Advisory | Package | Issue |
+|---|---|---|
+| GO-2026-6090 | `crypto/tls` | unlimited post-handshake messages |
+| GO-2026-6089 | `net/http` | missing `ReadHeaderTimeout` on unencrypted HTTP/2 check |
+| GO-2026-6088 | `encoding/xml` | unbounded recursion during decode |
+| GO-2026-5972 | `encoding/asn1` | unbounded recursion depth |
+
+CI now pins the newest 1.26 patch (`1.26.8`). Policy: keep the toolchain on
+the newest patch of the declared minor; advance the minor (`go` directive in
+`go.mod`, CI inputs, Dockerfile) as part of the task that requires it.
+
+### Mitigation and patch policy
+
+- Keep every module at the newest patch via Dependabot (`.github/dependabot.yml`,
+  weekly, grouped). Merge security PRs within their severity window: **critical
+  ≤ 7 days, high ≤ 30 days**.
+- CI must stay **exit 0** on `golang/govulncheck-action`; local gates are
+  `make vuln` and `make ci`.
+- Every CI run attaches an SPDX SBOM artifact
+  (`goshorty-sbom.spdx.json`) generated from the release binary for
+  provenance and supply-chain review.
+- Re-run this baseline whenever the dependency graph changes and update the
+  table (module, date, advisory count) so drift is visible in review.
+- If a reachable fix requires a newer Go toolchain, bump `go.mod` and the CI
+  `go-version` inputs in the same PR as the dependency change.

@@ -902,7 +902,7 @@
                                 <div class="url-item-header">
                                     <span class="url-item-code">${esc(url.short_code)}</span>
                                     <div class="url-item-actions">
-                                        ${!isExpired ? `<button class="btn-view" onclick="window.open(${JSON.stringify('/goshorty/' + (url.expires_in || '24h') + '/' + url.short_code)})">Open</button>` : ''}
+                                        ${!isExpired ? `<button class="btn-view" onclick="window.open(${JSON.stringify('/s/' + url.short_code)})">Open</button>` : ''}
                                         <button class="btn-copy" onclick="copyText(${JSON.stringify(url.original_url)})">Copy Original</button>
                                         <button class="btn-delete" onclick="deleteUrl(${JSON.stringify(url.short_code)})">Delete</button>
                                     </div>

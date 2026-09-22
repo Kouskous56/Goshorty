@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # Go module dependencies (go.mod / go.sum)
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    groups:
+      golang-org-x:
+        patterns:
+          - "golang.org/x/*"
+      pgx-postgres:
+        patterns:
+          - "github.com/jackc/*"
+    open-pull-requests-limit: 10
+
+  # GitHub Actions used by CI/CD workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 5
