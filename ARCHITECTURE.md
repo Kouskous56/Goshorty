@@ -1,5 +1,10 @@
 # GoShorty - Architecture & Design Document
 
+> **v3 note:** PostgreSQL persistence, authentication, rate limiting,
+> observability, database migrations, and automated cleanup are implemented.
+> Any “future” sections below describe the original prototype and are retained
+> only as historical design context.
+
 ## Project Overview
 
 GoShorty is a production-grade URL shortener service with Time-To-Live (TTL) support built with Go, Gin framework, and in-memory storage with automatic cleanup.

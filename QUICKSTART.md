@@ -16,7 +16,7 @@ go run main.go
 You should see:
 ```
 Starting GoShorty server on :8080
-Base URL: http://localhost:8080
+Base URL: http://goshorty.localhost:8080
 ```
 
 ### 3. Create a Short URL

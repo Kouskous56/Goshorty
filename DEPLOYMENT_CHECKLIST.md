@@ -1,4 +1,7 @@
-# 🚀 GoShorty v2.0 - Deployment Checklist
+# 🚀 GoShorty v3.0 - Deployment Checklist
+
+> The implementation is authoritative. New short links use `/s/<code>`;
+> `/goshorty/<ttl>/<code>` remains available only for backward compatibility.
 
 ## Pre-Launch Verification
 
@@ -90,19 +93,19 @@
 
 ### Option 1: Development Mode
 ```bash
-cd c:\Users\WELCOM YOU\OneDrive\Documents\CODING\GoShorty
+cd "E:\GoShorty"
 go run main.go
 ```
 
 ### Option 2: Using Executable
 ```bash
-cd c:\Users\WELCOM YOU\OneDrive\Documents\CODING\GoShorty
+cd "E:\GoShorty"
 goshorty.exe
 ```
 
 ### Option 3: Build Fresh
 ```bash
-cd c:\Users\WELCOM YOU\OneDrive\Documents\CODING\GoShorty
+cd "E:\GoShorty"
 go build -o goshorty.exe
 goshorty.exe
 ```
@@ -266,7 +269,7 @@ taskkill /PID <PID> /F
 ```
 Solution: Missing static/index.html
 Check:
-- File exists: c:\Users\WELCOM YOU\OneDrive\Documents\CODING\GoShorty\static\index.html
+- File exists: `E:\GoShorty\static\index.html`
 - Rebuild if missing: go run main.go
 ```
 

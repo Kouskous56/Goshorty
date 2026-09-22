@@ -1,4 +1,4 @@
-.PHONY: help setup doctor db-up db-down db-logs backup build run dev test test-local smoke coverage race integration e2e fmt-check vet vuln ci clean install-deps tidy
+.PHONY: help setup doctor db-up db-down db-logs stack-up stack-down backup build run dev test test-local smoke coverage race integration e2e fmt-check vet vuln ci clean install-deps tidy
 
 help:
 	@echo "GoShorty - URL Shortener with TTL"
@@ -9,6 +9,8 @@ help:
 	@echo "  make db-up          - Start local PostgreSQL 16"
 	@echo "  make db-down        - Stop local PostgreSQL without deleting data"
 	@echo "  make db-logs        - Follow local PostgreSQL logs"
+	@echo "  make stack-up       - Build and start GoShorty plus PostgreSQL"
+	@echo "  make stack-down     - Stop the complete local stack"
 	@echo "  make backup         - Create a local PostgreSQL custom-format backup"
 	@echo "  make install-deps    - Download Go dependencies"
 	@echo "  make build          - Build the executable"
@@ -39,6 +41,12 @@ db-down:
 
 db-logs:
 	docker compose --env-file .env.local logs -f postgres
+
+stack-up:
+	docker compose --env-file .env.local up --build -d
+
+stack-down:
+	docker compose --env-file .env.local down
 
 backup:
 	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backup-local.ps1
