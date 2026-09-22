@@ -159,6 +159,9 @@ Recommended:
 |---|---|
 | `ADMIN_EMAIL` | `admin@goshorty.local` |
 | `TOKEN_TTL` | `24h` |
+| `TOKEN_ISSUER` | empty — issuer claim disabled (backward compatible) |
+| `TOKEN_AUDIENCE` | empty — audience claim disabled (backward compatible) |
+| `SECRET_KEY_PREVIOUS` | empty — previous signing key for smooth rotation |
 | `ALLOWED_ORIGINS` | `PUBLIC_BASE_URL` |
 | `TRUSTED_PROXIES` | `100.64.0.0/10` |
 
@@ -174,7 +177,8 @@ bcrypt hash. Rotate the actual password through the authenticated Security tab.
 - Never reuse local or CI credentials in production.
 - Rotate a secret immediately if it appears in a log, issue, commit, or chat.
 - Keep `SECRET_KEY` stable across normal deploys; changing it invalidates all
-  existing tokens.
+  existing tokens unless `SECRET_KEY_PREVIOUS` carries the previous value
+  (smooth rotation, see `OPERATIONS.md`).
 - Prefer Railway same-project references over public database URLs.
 
 The `.gitignore` rules ignore all `.env*` files except committed `*.example`

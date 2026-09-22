@@ -119,6 +119,12 @@ func (us *UserStorage) GetUserByID(id string) (*models.User, error) {
 func (us *UserStorage) VerifyPassword(username, password string) (bool, error) {
 	user, err := us.GetUser(username)
 	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			// Run a real bcrypt comparison against a fixed dummy hash so a
+			// missing username does not reveal itself through faster response
+			// times (timing-based username enumeration resistance).
+			_ = bcrypt.CompareHashAndPassword([]byte(dummyPasswordHash()), []byte(password))
+		}
 		return false, err
 	}
 
@@ -221,6 +227,19 @@ func hashPassword(password string) (string, error) {
 	}
 	return string(hash), nil
 }
+
+// dummyPasswordHash is a pre-computed bcrypt hash used for timing equalization
+// when a username does not exist (see VerifyPassword).
+var dummyPasswordHash = sync.OnceValue(func() string {
+	hash, err := bcrypt.GenerateFromPassword(
+		[]byte("goshorty-dummy-password-placeholder"),
+		bcrypt.DefaultCost,
+	)
+	if err != nil {
+		panic("failed to precompute dummy password hash: " + err.Error())
+	}
+	return string(hash)
+})
 
 func (us *UserStorage) adminCountLocked() int {
 	count := 0

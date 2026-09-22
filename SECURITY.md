@@ -38,6 +38,43 @@ revocation mechanism.
 password. It invalidates all browser/API sessions for that user, including the
 token used to request revocation.
 
+## Token format and hardening
+
+Tokens keep the self-designed format `base64url(payload).base64url(signature)`
+signed with HMAC-SHA256 (no JWT library). Verification checks the signature —
+length-constrained to the exact SHA-256 size — **before** parsing the payload,
+and rejects tokens larger than 4 KB.
+
+Claims:
+
+| Claim | Meaning |
+|---|---|
+| `jti` | random per-token ID (audit/correlation; enables per-session revocation later) |
+| `user_id`, `username`, `role`, `token_version` | identity + live revocation version |
+| `iss`, `aud` | optional issuer/audience; empty on both sides = not enforced |
+| `kid` | signing key id (`v1`); legacy tokens carry none |
+| `issued_at`, `expires_at` | issuance and expiry timestamps |
+
+Additional verification rules (all additive, existing tokens stay valid):
+
+- `issued_at` in the future (beyond 30 s skew) is rejected.
+- Token lifetime (`expires_at - issued_at`) may not exceed the configured
+  `TOKEN_TTL`; a leaked signing key cannot mint indefinitely valid tokens.
+- `iss`/`aud` are enforced only when `TOKEN_ISSUER`/`TOKEN_AUDIENCE` are set;
+  enabling them invalidates previously issued tokens (clients re-login).
+- `kid` must be `v1`; unknown key ids are rejected.
+
+Key rotation is smooth via `SECRET_KEY_PREVIOUS`: set the new value in
+`SECRET_KEY`, move the old value into `SECRET_KEY_PREVIOUS` for the transition
+window, then remove it. During the window new tokens are signed with the active
+key while legacy kid-less tokens still verify against the previous key.
+Rotating `SECRET_KEY` without a previous value remains the emergency
+global-revocation mechanism.
+
+Login performs a real bcrypt comparison against a fixed dummy hash when the
+username does not exist, equalizing response timing to resist timing-based
+username enumeration.
+
 ## Audit events
 
 Successful authentication, registration, password rotation, session

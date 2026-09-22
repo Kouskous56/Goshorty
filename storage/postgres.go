@@ -351,6 +351,11 @@ func (s *PostgresStore) GetUserByID(id string) (*models.User, error) {
 func (s *PostgresStore) VerifyPassword(username, password string) (bool, error) {
 	user, err := s.GetUser(username)
 	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			// Equalize timing with the real bcrypt path so that a missing
+			// username does not reveal itself through faster responses.
+			_ = bcrypt.CompareHashAndPassword([]byte(dummyPasswordHash()), []byte(password))
+		}
 		return false, err
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {

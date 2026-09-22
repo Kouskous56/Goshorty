@@ -28,12 +28,15 @@ type DatabaseConfig struct {
 	URL string
 }
 
-// SecurityConfig holds browser and reverse-proxy trust settings.
+// SecurityConfig holds browser, reverse-proxy trust, and token settings.
 type SecurityConfig struct {
 	AllowedOrigins  []string
 	TrustedProxies  []string
 	MaxRequestBytes int64
 	MetricsToken    string
+	TokenTTL        time.Duration
+	TokenIssuer     string
+	TokenAudience   string
 }
 
 // TTLConfig holds TTL duration settings
@@ -78,6 +81,9 @@ func NewConfig() *Config {
 			TrustedProxies:  listFromEnv("TRUSTED_PROXIES", "100.64.0.0/10"),
 			MaxRequestBytes: 1 << 20,
 			MetricsToken:    os.Getenv("METRICS_TOKEN"),
+			TokenTTL:        tokenTTLFromEnv(),
+			TokenIssuer:     os.Getenv("TOKEN_ISSUER"),
+			TokenAudience:   os.Getenv("TOKEN_AUDIENCE"),
 		},
 		TTL: TTLConfig{
 			Options: map[string]time.Duration{
@@ -106,6 +112,17 @@ func listFromEnv(key, fallback string) []string {
 	return values
 }
 
+// tokenTTLFromEnv parses TOKEN_TTL, defaulting to 24h. Malformed values fall
+// back silently here and are rejected loudly by Validate at startup.
+func tokenTTLFromEnv() time.Duration {
+	if raw := os.Getenv("TOKEN_TTL"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil {
+			return parsed
+		}
+	}
+	return 24 * time.Hour
+}
+
 // Validate verifies configuration values that affect externally visible URLs.
 func (c *Config) Validate() error {
 	if c == nil {
@@ -132,6 +149,34 @@ func (c *Config) Validate() error {
 	}
 	if os.Getenv("GIN_MODE") == "release" && len([]byte(c.Security.MetricsToken)) < 32 {
 		return fmt.Errorf("METRICS_TOKEN must be at least 32 bytes in release mode")
+	}
+	if raw := os.Getenv("TOKEN_TTL"); raw != "" {
+		if _, err := time.ParseDuration(raw); err != nil {
+			return fmt.Errorf("TOKEN_TTL must be a valid duration (e.g. 24h): %w", err)
+		}
+	}
+	if err := validateLabel(c.Security.TokenIssuer, "TOKEN_ISSUER"); err != nil {
+		return err
+	}
+	if err := validateLabel(c.Security.TokenAudience, "TOKEN_AUDIENCE"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateLabel bounds optional token issuer/audience values and rejects
+// whitespace or control characters.
+func validateLabel(value, name string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("%s must be at most 128 characters", name)
+	}
+	for _, r := range value {
+		if r < 0x21 || r > 0x7E {
+			return fmt.Errorf("%s must not contain spaces or control characters", name)
+		}
 	}
 	return nil
 }
