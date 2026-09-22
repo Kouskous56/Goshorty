@@ -250,6 +250,7 @@ func newTestAPIRouter() (*gin.Engine, *services.URLService) {
 	router.GET("/s/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
 	router.GET("/goshorty/:timeout/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
 	registerAPIInfo(router, "test-build")
+	registerOpenAPI(router)
 	router.NoRoute(func(c *gin.Context) {
 		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})

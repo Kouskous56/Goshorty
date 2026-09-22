@@ -1,0 +1,1664 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "GoShorty URL Shortener API",
+    "version": "3.0.0",
+    "description": "REST API for the GoShorty URL shortener (TTL links, custom codes, visits, stats).\n\nThe canonical API surface is `/api/v1/*`. Legacy `/api/*` routes remain fully functional as backward-compatible aliases and are marked `deprecated` in this document. The canonical short-link redirect is `/r/:code`; `/s/:code` and `/goshorty/:timeout/:code` are retained so previously issued links keep working.\n\nAll protected endpoints require `Authorization: Bearer <token>`. Tokens are HMAC-signed payload.signature strings issued by `/api/v1/auth/login` or `/api/v1/auth/register` (see SECURITY.md).",
+    "contact": {
+      "name": "Kouskous56",
+      "url": "https://github.com/Kouskous56/Goshorty"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://goshorty.localhost:8080",
+      "description": "Local default (configured via PUBLIC_BASE_URL)"
+    }
+  ],
+  "tags": [
+    { "name": "Auth", "description": "Registration, login and current-user operations" },
+    { "name": "URLs", "description": "Short URL management and redirects" },
+    { "name": "Admin", "description": "User management (admin only)" },
+    { "name": "Operational", "description": "Health, readiness, metrics, version and API metadata" }
+  ],
+  "security": [
+    { "BearerAuth": [] }
+  ],
+  "paths": {
+    "/api/v1/auth/register": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Register a new user",
+        "description": "Creates a user and returns an access token in the same call.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RegisterRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User created; token issued",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or weak password",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "Username already registered",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Login and obtain a bearer token",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful; token issued",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Current user information",
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MeResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "User no longer exists",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password": {
+      "put": {
+        "tags": ["Auth"],
+        "summary": "Change the current user's password",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChangePasswordRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, weak or unchanged password",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid token or wrong current password",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/revoke": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Revoke all sessions for the current user",
+        "description": "Invalidates the token used for the request and every other token issued to that user. Subsequent requests with old tokens return 401.",
+        "responses": {
+          "200": {
+            "description": "All sessions revoked",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/urls": {
+      "post": {
+        "tags": ["URLs"],
+        "summary": "Create a short URL",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ShortenRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Short URL created; short_url uses the canonical /r/:code format",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ShortenResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or URL",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "Custom short code already taken",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["URLs"],
+        "summary": "List URLs visible to the caller (paginated, newest first)",
+        "description": "Keyset pagination: pass `limit` (1-200, default 50) and the `cursor` returned as `next_cursor` on the previous page. Ordered by created_at DESC with short_code ASC tie-break.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Items per page (1-200, default 50)",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque keyset cursor from the previous response's next_cursor",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of URLs plus total count and optional next_cursor",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/URLListResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit or cursor",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/urls/{code}": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "Short code",
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "tags": ["URLs"],
+        "summary": "Get URL information",
+        "responses": {
+          "200": {
+            "description": "URL metadata including visit count",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/URLData" }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing short code",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "URL not found, expired, or owned by someone else",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["URLs"],
+        "summary": "Delete a short URL (owner or admin)",
+        "responses": {
+          "200": {
+            "description": "URL deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/URLDeleteResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing short code",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "URL not found or expired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "tags": ["URLs"],
+        "summary": "Get statistics for visible URLs",
+        "responses": {
+          "200": {
+            "description": "Total URLs and visits",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StatsResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/users": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "List all users (paginated, sorted by username)",
+        "description": "Admin only. Keyset pagination identical to the URL list (limit 1-200 default 50, cursor via next_cursor).",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Items per page (1-200, default 50)",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque keyset cursor from the previous response's next_cursor",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of users plus total count and optional next_cursor",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserListResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit or cursor",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/users/{username}/role": {
+      "parameters": [
+        {
+          "name": "username",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Update a user's role (admin only)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["role"],
+                "properties": {
+                  "role": { "type": "string", "enum": ["admin", "user"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Role updated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserRoleUpdateResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or role",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "The last admin cannot be demoted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/users/{username}": {
+      "parameters": [
+        {
+          "name": "username",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "delete": {
+        "tags": ["Admin"],
+        "summary": "Delete a user (admin only)",
+        "responses": {
+          "200": {
+            "description": "User deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserDeleteResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "The last admin cannot be deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/r/{code}": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "tags": ["URLs"],
+        "summary": "Canonical redirect to the original URL",
+        "security": [],
+        "responses": {
+          "302": {
+            "description": "Found - redirects to the original URL and increments the visit counter",
+            "headers": {
+              "Location": {
+                "description": "Original URL",
+                "schema": { "type": "string", "format": "uri" }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing short code",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "URL not found or expired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/s/{code}": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "tags": ["URLs"],
+        "summary": "Legacy redirect alias (kept working)",
+        "deprecated": true,
+        "security": [],
+        "responses": {
+          "302": {
+            "description": "Found - redirects to the original URL",
+            "headers": {
+              "Location": {
+                "schema": { "type": "string", "format": "uri" }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing short code",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "URL not found or expired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/goshorty/{timeout}/{code}": {
+      "parameters": [
+        {
+          "name": "timeout",
+          "in": "path",
+          "required": true,
+          "description": "Legacy TTL display (e.g. 24h); expiration is authoritative in storage",
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "tags": ["URLs"],
+        "summary": "Legacy redirect route (kept working)",
+        "deprecated": true,
+        "security": [],
+        "responses": {
+          "302": {
+            "description": "Found - redirects to the original URL",
+            "headers": {
+              "Location": {
+                "schema": { "type": "string", "format": "uri" }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing short code",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "URL not found or expired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Process liveness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service is alive",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Process liveness (canonical alias)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service is alive",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Database readiness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReadyResponse" }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready (persistence dependency unreachable)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReadyResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Database readiness (canonical alias)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReadyResponse" }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReadyResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Release build metadata",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Version, commit and build timestamp",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/VersionResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Prometheus metrics",
+        "description": "Protected by METRICS_TOKEN in release builds (metrics middleware enforces a bearer token when configured).",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition format",
+            "content": {
+              "text/plain": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid metrics token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "This OpenAPI 3.1 specification (JSON)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Canonical API surface description",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service and endpoint information",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/APIDescriptor" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api": {
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Legacy API surface description (points at the canonical /api/v1)",
+        "deprecated": true,
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service info including canonical_api",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/APIDescriptor" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Legacy alias of POST /api/v1/auth/register",
+        "deprecated": true,
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RegisterRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or weak password",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "Username already registered",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Legacy alias of POST /api/v1/auth/login",
+        "deprecated": true,
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LoginResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Legacy alias of GET /api/v1/auth/me",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MeResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password": {
+      "put": {
+        "tags": ["Auth"],
+        "summary": "Legacy alias of PUT /api/v1/auth/password",
+        "deprecated": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChangePasswordRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, weak or unchanged password",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid token or wrong current password",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/revoke": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Legacy alias of POST /api/v1/auth/revoke",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "All sessions revoked",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shorten": {
+      "post": {
+        "tags": ["URLs"],
+        "summary": "Legacy alias of POST /api/v1/urls",
+        "deprecated": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ShortenRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Short URL created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ShortenResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or URL",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "Custom short code already taken",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shorten/{code}": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "tags": ["URLs"],
+        "summary": "Legacy alias of GET /api/v1/urls/{code}",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "URL metadata",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/URLData" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "URL not found or expired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["URLs"],
+        "summary": "Legacy alias of DELETE /api/v1/urls/{code}",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "URL deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/URLDeleteResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "URL not found or expired",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shorten/all": {
+      "get": {
+        "tags": ["URLs"],
+        "summary": "Legacy alias of GET /api/v1/urls (non-paginated, full list)",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "Full list (no pagination fields)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["urls"],
+                  "properties": {
+                    "urls": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/URLData" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stats": {
+      "get": {
+        "tags": ["URLs"],
+        "summary": "Legacy alias of GET /api/v1/stats",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "Statistics",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StatsResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/users": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "Legacy alias of GET /api/v1/auth/users (non-paginated)",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "Full user list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["users"],
+                  "properties": {
+                    "users": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/User" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/users/{username}/role": {
+      "parameters": [
+        {
+          "name": "username",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "put": {
+        "tags": ["Admin"],
+        "summary": "Legacy alias of PUT /api/v1/auth/users/{username}/role",
+        "deprecated": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["role"],
+                "properties": {
+                  "role": { "type": "string", "enum": ["admin", "user"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Role updated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserRoleUpdateResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or role",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "The last admin cannot be demoted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/users/{username}": {
+      "parameters": [
+        {
+          "name": "username",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "delete": {
+        "tags": ["Admin"],
+        "summary": "Legacy alias of DELETE /api/v1/auth/users/{username}",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "User deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserDeleteResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "The last admin cannot be deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Token from /api/v1/auth/login or /api/v1/auth/register. Format: base64url(payload).base64url(signature), HMAC-SHA256 signed."
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["message", "code"],
+        "properties": {
+          "message": { "type": "string", "description": "Human-readable error message" },
+          "code": { "type": "string", "description": "Machine-readable error code" }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": ["id", "username", "email", "role", "created_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "username": { "type": "string", "minLength": 3, "maxLength": 50 },
+          "email": { "type": "string", "format": "email" },
+          "role": { "type": "string", "enum": ["admin", "user"] },
+          "created_at": { "type": "integer", "format": "int64", "description": "Unix timestamp" }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": ["username", "password", "email"],
+        "properties": {
+          "username": { "type": "string", "minLength": 3, "maxLength": 50 },
+          "password": { "type": "string", "minLength": 12, "maxLength": 72, "description": "Password length in bytes, 12-72" },
+          "email": { "type": "string", "format": "email" }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string" },
+          "password": { "type": "string" }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "required": ["token", "user", "message"],
+        "properties": {
+          "token": { "type": "string", "description": "Bearer token" },
+          "user": { "$ref": "#/components/schemas/User" },
+          "message": { "type": "string" }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": ["current_password", "new_password"],
+        "properties": {
+          "current_password": { "type": "string" },
+          "new_password": { "type": "string", "minLength": 12, "maxLength": 72, "description": "Must differ from current password" }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "required": ["user", "role", "username"],
+        "properties": {
+          "user": { "$ref": "#/components/schemas/User" },
+          "role": { "type": "string" },
+          "username": { "type": "string" }
+        }
+      },
+      "MessageResponse": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string" }
+        }
+      },
+      "ShortenRequest": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "format": "uri", "description": "Original URL to shorten" },
+          "expires_in": {
+            "type": "string",
+            "enum": ["5m", "15m", "1h", "24h", "168h"],
+            "description": "TTL; defaults to 24h",
+            "default": "24h"
+          },
+          "custom_code": {
+            "type": "string",
+            "maxLength": 50,
+            "pattern": "^[a-zA-Z0-9]+$",
+            "description": "Alphanumeric custom short code"
+          }
+        }
+      },
+      "ShortenResponse": {
+        "type": "object",
+        "required": ["id", "short_url", "short_code", "original_url", "expires_in", "expires_at", "created_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "short_url": { "type": "string", "format": "uri", "description": "Public redirect link; uses the canonical /r/:code format" },
+          "short_code": { "type": "string" },
+          "original_url": { "type": "string", "format": "uri" },
+          "expires_in": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "URLData": {
+        "type": "object",
+        "required": ["id", "short_code", "original_url", "expires_in", "expires_at", "created_at", "created_by", "visits"],
+        "properties": {
+          "id": { "type": "string" },
+          "short_code": { "type": "string" },
+          "original_url": { "type": "string", "format": "uri" },
+          "expires_in": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "created_by": { "type": "string", "description": "ID of the owning user" },
+          "visits": { "type": "integer", "format": "int64" }
+        }
+      },
+      "URLListResponse": {
+        "type": "object",
+        "required": ["urls", "total"],
+        "properties": {
+          "urls": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/URLData" }
+          },
+          "total": { "type": "integer", "description": "Total visible URLs matching the query" },
+          "next_cursor": { "type": "string", "description": "Opaque cursor for the next page; absent on the last page" }
+        }
+      },
+      "UserListResponse": {
+        "type": "object",
+        "required": ["users", "total"],
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/User" }
+          },
+          "total": { "type": "integer" },
+          "next_cursor": { "type": "string", "description": "Absent on the last page" }
+        }
+      },
+      "StatsResponse": {
+        "type": "object",
+        "properties": {
+          "total_urls": { "type": "integer" },
+          "total_visits": { "type": "integer" }
+        }
+      },
+      "URLDeleteResponse": {
+        "type": "object",
+        "required": ["message", "code"],
+        "properties": {
+          "message": { "type": "string" },
+          "code": { "type": "string" }
+        }
+      },
+      "UserRoleUpdateResponse": {
+        "type": "object",
+        "required": ["message", "username", "role"],
+        "properties": {
+          "message": { "type": "string" },
+          "username": { "type": "string" },
+          "role": { "type": "string" }
+        }
+      },
+      "UserDeleteResponse": {
+        "type": "object",
+        "required": ["message", "username"],
+        "properties": {
+          "message": { "type": "string" },
+          "username": { "type": "string" }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": ["status", "service"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok"] },
+          "service": { "type": "string" }
+        }
+      },
+      "ReadyResponse": {
+        "type": "object",
+        "required": ["status", "service"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ready", "not_ready"] },
+          "service": { "type": "string" }
+        }
+      },
+      "VersionResponse": {
+        "type": "object",
+        "required": ["version", "commit", "build_time"],
+        "properties": {
+          "version": { "type": "string" },
+          "commit": { "type": "string" },
+          "build_time": { "type": "string" }
+        }
+      },
+      "APIDescriptor": {
+        "type": "object",
+        "description": "Service and endpoint information returned by /api/v1 and /api",
+        "properties": {
+          "service": { "type": "string" },
+          "version": { "type": "string" },
+          "frontend": { "type": "string" },
+          "canonical_api": { "type": "string", "description": "Only on the legacy /api descriptor" },
+          "endpoints": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
