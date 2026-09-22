@@ -29,7 +29,7 @@ GoShorty is a production-grade URL shortener service with Time-To-Live (TTL) sup
 ┌─────────────────────────────────────────────────────────────┐
 │                    HTTP Handlers                            │
 ├─────────────────────────────────────────────────────────────┤
-│  • CreateShortURL     (POST /api/shorten)                   │
+│  • CreateShortURL     (POST /api/v1/urls)                   │
 │  • Redirect          (GET /goshorty/:timeout/:code)         │
 │  • GetURLInfo        (GET /api/shorten/:code)               │
 │  • DeleteURL         (DELETE /api/shorten/:code)            │
@@ -61,14 +61,20 @@ GoShorty is a production-grade URL shortener service with Time-To-Live (TTL) sup
 
 **Responsibility:** Parse HTTP requests, validate input, and format responses
 
+Route registration: `/api/v1/*` is the canonical API surface; the legacy
+`/api/*` set is kept as backward-compatible aliases, the canonical redirect is
+`/r/:code` with `/s/:code` and `/goshorty/:timeout/:code` retained. See
+`API_REFERENCE.md` for the full matrix.
+
 **Key Methods:**
-- `CreateShortURL()` - POST /api/shorten
-- `Redirect()` - GET /goshorty/:timeout/:code
-- `GetURLInfo()` - GET /api/shorten/:code
-- `DeleteURL()` - DELETE /api/shorten/:code
-- `GetAllURLs()` - GET /api/shorten/all
-- `GetStats()` - GET /api/stats
-- `Health()` - GET /health
+- `CreateShortURL()` - POST /api/v1/urls (legacy alias: POST /api/v1/urls)
+- `Redirect()` - GET /r/:code (legacy aliases: GET /s/:code, GET /goshorty/:timeout/:code)
+- `GetURLInfo()` - GET /api/v1/urls/:code (legacy alias: GET /api/shorten/:code)
+- `DeleteURL()` - DELETE /api/v1/urls/:code (legacy alias: DELETE /api/shorten/:code)
+- `GetAllURLs()` - GET /api/v1/urls (legacy alias: GET /api/shorten/all)
+- `GetStats()` - GET /api/v1/stats (legacy alias: GET /api/stats)
+- `Health()` - GET /health (alias: GET /health/live)
+- `Ready()` - GET /ready (alias: GET /health/ready)
 
 ### 2. Service Layer (`services/url_service.go`)
 
@@ -163,7 +169,7 @@ type Config struct {
 ### Creating a Short URL
 
 ```
-POST /api/shorten
+POST /api/v1/urls
     ↓
 [Handler] Parses JSON input
     ↓

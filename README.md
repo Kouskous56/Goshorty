@@ -118,9 +118,15 @@ E2E instructions.
 
 ## API Documentation
 
+`/api/v1/*` is the canonical API surface; the legacy `/api/*` routes remain
+fully functional as backward-compatible aliases. The canonical short-link
+redirect format is `/r/:code` (`/s/:code` and `/goshorty/:timeout/:code`
+still work). See [API_REFERENCE.md](API_REFERENCE.md) for the complete
+reference.
+
 ### Create Short URL
 
-**Endpoint:** `POST /api/shorten`
+**Endpoint:** `POST /api/v1/urls` (legacy alias: `POST /api/shorten`)
 
 **Request Body:**
 ```json
@@ -140,7 +146,7 @@ E2E instructions.
 ```json
 {
   "id": "a1b2c3d4e5f6g7h8",
-  "short_url": "http://localhost:8080/goshorty/24h/mycode",
+  "short_url": "http://localhost:8080/r/mycode",
   "short_code": "mycode",
   "original_url": "https://example.com/very/long/url",
   "expires_in": "24h",
@@ -151,15 +157,17 @@ E2E instructions.
 
 ### Redirect to Original URL
 
-**Endpoint:** `GET /goshorty/:timeout/:code`
+**Endpoint:** `GET /r/:code`
 
-Example: `GET /goshorty/24h/mycode`
+Example: `GET /r/mycode`
 
-Redirects to the original URL if not expired. Returns 404 if expired or not found.
+Redirects to the original URL if not expired. Returns 404 if expired or not
+found. Backward-compatible aliases: `GET /s/:code` and
+`GET /goshorty/:timeout/:code`.
 
 ### Get URL Information
 
-**Endpoint:** `GET /api/shorten/:code`
+**Endpoint:** `GET /api/v1/urls/:code` (legacy alias: `GET /api/shorten/:code`)
 
 **Response:**
 ```json
@@ -176,7 +184,7 @@ Redirects to the original URL if not expired. Returns 404 if expired or not foun
 
 ### Delete Short URL
 
-**Endpoint:** `DELETE /api/shorten/:code`
+**Endpoint:** `DELETE /api/v1/urls/:code` (legacy alias: `DELETE /api/shorten/:code`)
 
 **Response:**
 ```json
@@ -188,7 +196,7 @@ Redirects to the original URL if not expired. Returns 404 if expired or not foun
 
 ### Get All URLs
 
-**Endpoint:** `GET /api/shorten/all`
+**Endpoint:** `GET /api/v1/urls` (legacy alias: `GET /api/shorten/all`)
 
 **Response:**
 ```json
@@ -199,7 +207,7 @@ Redirects to the original URL if not expired. Returns 404 if expired or not foun
 
 ### Get Statistics
 
-**Endpoint:** `GET /api/stats`
+**Endpoint:** `GET /api/v1/stats` (legacy alias: `GET /api/stats`)
 
 **Response:**
 ```json
@@ -265,7 +273,7 @@ The new password must be between 12 and 72 bytes.
 
 **Create a short URL:**
 ```bash
-curl -X POST http://localhost:8080/api/shorten \
+curl -X POST http://localhost:8080/api/v1/urls \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://www.google.com",
@@ -276,19 +284,19 @@ curl -X POST http://localhost:8080/api/shorten \
 
 **Get URL info:**
 ```bash
-curl http://localhost:8080/api/shorten/google
+curl http://localhost:8080/api/v1/urls/google
 ```
 
 **Delete short URL:**
 ```bash
-curl -X DELETE http://localhost:8080/api/shorten/google
+curl -X DELETE http://localhost:8080/api/v1/urls/google
 ```
 
 ### Using JavaScript/Fetch
 
 ```javascript
 // Create short URL
-const response = await fetch('http://localhost:8080/api/shorten', {
+const response = await fetch('http://localhost:8080/api/v1/urls', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({

@@ -11,6 +11,7 @@ import (
 	"goshorty/storage"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -213,5 +214,314 @@ func TestStatistics(t *testing.T) {
 	}
 	if stats["total_urls"] != 3 {
 		t.Errorf("Expected 3 URLs, got %v", stats["total_urls"])
+	}
+}
+
+// --- T4: /api/v1 canonical surface + backward-compatible aliases ---
+
+// newTestAPIRouter builds a router with the same wiring as production
+// (registerAPIGroup for /api and /api/v1, health aliases, redirect routes and
+// the NoRoute fallback) for route-layer tests.
+func newTestAPIRouter() (*gin.Engine, *services.URLService) {
+	gin.SetMode(gin.TestMode)
+	cfg := config.NewConfig()
+
+	urlStore := storage.NewStorage()
+	urlService := services.NewURLService(urlStore, cfg)
+
+	userStore, err := storage.NewUserStorage("test-admin", "admin@goshorty.local")
+	if err != nil {
+		panic(err)
+	}
+	tokenService := services.NewTokenService("test-secret-key")
+	authHandler := handlers.NewAuthHandler(userStore, tokenService)
+	h := handlers.NewHandler(urlService)
+	rateLimiter := handlers.NewRateLimiter()
+
+	router := gin.New()
+	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, "/shorten", "/shorten/all")
+	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, "/urls", "/urls")
+
+	router.GET("/health", h.Health)
+	router.GET("/health/live", h.Health)
+	router.GET("/ready", h.Ready)
+	router.GET("/health/ready", h.Ready)
+	router.GET("/r/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
+	router.GET("/s/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
+	router.GET("/goshorty/:timeout/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
+	registerAPIInfo(router, "test-build")
+	router.NoRoute(func(c *gin.Context) {
+		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+			return
+		}
+		c.String(http.StatusOK, "index")
+	})
+	return router, urlService
+}
+
+// loginAsAdmin returns a valid bearer token for the bootstrap admin user.
+func loginAsAdmin(t *testing.T, router *gin.Engine) string {
+	t.Helper()
+	body, _ := json.Marshal(models.LoginRequest{Username: "admin", Password: "test-admin"})
+	req, _ := http.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin login: expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp models.LoginResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("admin login: parse response: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("admin login: empty token")
+	}
+	return resp.Token
+}
+
+// TestV1AndLegacyAuthRoutesWork proves /api/v1/auth/* registers the same
+// handlers as the legacy /api/auth/* and both surfaces are live.
+func TestV1AndLegacyAuthRoutesWork(t *testing.T) {
+	router, _ := newTestAPIRouter()
+
+	register := func(path, username string) int {
+		t.Helper()
+		body, _ := json.Marshal(models.RegisterRequest{
+			Username: username,
+			Password: "secure-password-123",
+			Email:    username + "@example.com",
+		})
+		req, _ := http.NewRequest(http.MethodPost, path, bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	if code := register("/api/v1/auth/register", "v1user"); code != http.StatusCreated {
+		t.Fatalf("v1 register: expected 201, got %d", code)
+	}
+	if code := register("/api/auth/register", "legacyuser"); code != http.StatusCreated {
+		t.Fatalf("legacy register: expected 201, got %d", code)
+	}
+
+	// Login through both surfaces.
+	login := func(path, username string) string {
+		t.Helper()
+		body, _ := json.Marshal(models.LoginRequest{Username: username, Password: "secure-password-123"})
+		req, _ := http.NewRequest(http.MethodPost, path, bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("login %s: expected 200, got %d (%s)", path, w.Code, w.Body.String())
+		}
+		var resp models.LoginResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("login %s: parse: %v", path, err)
+		}
+		if resp.Token == "" {
+			t.Fatalf("login %s: empty token", path)
+		}
+		return resp.Token
+	}
+
+	v1Token := login("/api/v1/auth/login", "v1user")
+	legacyToken := login("/api/auth/login", "legacyuser")
+
+	me := func(path, token string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := me("/api/v1/auth/me", v1Token); code != http.StatusOK {
+		t.Fatalf("v1 /auth/me: expected 200, got %d", code)
+	}
+	if code := me("/api/auth/me", legacyToken); code != http.StatusOK {
+		t.Fatalf("legacy /auth/me: expected 200, got %d", code)
+	}
+}
+
+// TestURLAliasesShareHandlers proves the canonical /api/v1/urls* routes and
+// the legacy /api/shorten* aliases hit the same handlers, and that operations
+// through one surface are visible through the other.
+func TestURLAliasesShareHandlers(t *testing.T) {
+	router, _ := newTestAPIRouter()
+	token := loginAsAdmin(t, router)
+	auth := "Bearer " + token
+
+	create := func(path, url, customCode string) models.ShortenResponse {
+		t.Helper()
+		body, _ := json.Marshal(models.ShortenRequest{URL: url, CustomCode: customCode})
+		req, _ := http.NewRequest(http.MethodPost, path, bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", auth)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s: expected 201, got %d (%s)", path, w.Code, w.Body.String())
+		}
+		var resp models.ShortenResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("create %s: parse: %v", path, err)
+		}
+		return resp
+	}
+
+	v1 := create("/api/v1/urls", "https://example.com/v1", "t4v1")
+	if !strings.HasSuffix(v1.ShortURL, "/r/"+v1.ShortCode) {
+		t.Fatalf("v1 public link does not use /r/:code format: %s", v1.ShortURL)
+	}
+	legacy := create("/api/shorten", "https://example.com/legacy", "t4leg")
+
+	get := func(path string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", auth)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// Info and list on both surfaces.
+	for _, path := range []string{
+		"/api/v1/urls/" + v1.ShortCode,
+		"/api/v1/urls/" + legacy.ShortCode,
+		"/api/shorten/" + v1.ShortCode,
+		"/api/shorten/" + legacy.ShortCode,
+		"/api/v1/urls",
+		"/api/shorten/all",
+		"/api/v1/stats",
+		"/api/stats",
+		"/api/v1/auth/users",
+		"/api/auth/users",
+	} {
+		if code := get(path); code != http.StatusOK {
+			t.Errorf("GET %s: expected 200, got %d", path, code)
+		}
+	}
+
+	// Delete via v1, then confirm the legacy info route reports it gone.
+	del := func(path string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodDelete, path, nil)
+		req.Header.Set("Authorization", auth)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := del("/api/v1/urls/" + v1.ShortCode); code != http.StatusOK {
+		t.Fatalf("DELETE v1: expected 200, got %d", code)
+	}
+	if code := get("/api/shorten/" + v1.ShortCode); code != http.StatusNotFound {
+		t.Fatalf("legacy info after v1 delete: expected 404, got %d", code)
+	}
+	if code := del("/api/shorten/" + legacy.ShortCode); code != http.StatusOK {
+		t.Fatalf("DELETE legacy: expected 200, got %d", code)
+	}
+	if code := get("/api/v1/urls/" + legacy.ShortCode); code != http.StatusNotFound {
+		t.Fatalf("v1 info after legacy delete: expected 404, got %d", code)
+	}
+}
+
+// TestRedirectRoutes proves the canonical /r/:code and the backward-compatible
+// aliases all redirect to the original URL.
+func TestRedirectRoutes(t *testing.T) {
+	router, urlService := newTestAPIRouter()
+
+	created, err := urlService.CreateShortURL(&models.ShortenRequest{
+		URL:        "https://example.com/target",
+		CustomCode: "t4redir",
+	}, "owner-id")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	code := created.ShortCode
+
+	redirect := func(path string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code, w.Header().Get("Location")
+	}
+
+	for _, path := range []string{"/r/" + code, "/s/" + code, "/goshorty/1h/" + code} {
+		status, loc := redirect(path)
+		if status != http.StatusFound {
+			t.Errorf("GET %s: expected 302, got %d", path, status)
+		}
+		if loc != "https://example.com/target" {
+			t.Errorf("GET %s: expected target Location, got %q", path, loc)
+		}
+	}
+}
+
+// TestHealthAndReadyAliases proves the canonical and legacy health/ready
+// endpoints all respond with 200.
+func TestHealthAndReadyAliases(t *testing.T) {
+	router, _ := newTestAPIRouter()
+	for _, path := range []string{"/health", "/health/live", "/ready", "/health/ready"} {
+		req, _ := http.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s: expected 200, got %d (%s)", path, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestAPIV1UnknownRouteReturnsJSON404 proves unknown /api paths get a JSON 404
+// (not the SPA fallback) while non-API paths still serve the SPA index.
+func TestAPIV1UnknownRouteReturnsJSON404(t *testing.T) {
+	router, _ := newTestAPIRouter()
+	for _, path := range []string{"/api/v1/does-not-exist", "/api/does-not-exist"} {
+		req, _ := http.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("GET %s: expected 404, got %d", path, w.Code)
+		}
+		if !json.Valid(w.Body.Bytes()) {
+			t.Errorf("GET %s: expected JSON body, got %q", path, w.Body.String())
+		}
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, "/some/spa/route", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("SPA fallback: expected 200, got %d", w.Code)
+	}
+}
+
+// TestAPIInfoEndpoints proves /api and /api/v1 describe the API surface and
+// that /api points at /api/v1 as the canonical version.
+func TestAPIInfoEndpoints(t *testing.T) {
+	router, _ := newTestAPIRouter()
+
+	req, _ := http.NewRequest(http.MethodGet, "/api", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api: expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "\"canonical_api\":\"/api/v1\"") {
+		t.Errorf("GET /api: expected canonical_api field, got %s", w.Body.String())
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, "/api/v1", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1: expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "\"POST /api/v1/urls\"") {
+		t.Errorf("GET /api/v1: expected v1 endpoints listing, got %s", w.Body.String())
 	}
 }

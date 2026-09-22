@@ -63,7 +63,7 @@ func TestShortURLUsesConfiguredPublicBaseURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(created.ShortURL, "https://short.example.com/s/") {
+	if !strings.HasPrefix(created.ShortURL, "https://short.example.com/r/") {
 		t.Fatalf("unexpected public URL: %s", created.ShortURL)
 	}
 }
