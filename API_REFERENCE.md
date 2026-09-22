@@ -620,7 +620,8 @@ original response shapes.
 In-memory per-key rate limiting is applied on sensitive endpoints: login,
 register, password change, session revocation, URL creation and redirects.
 Limits are defined in `main.go` (for example login 10/min, register 5/hour,
-shorten 60/min, redirect 300/min).
+shorten 60/min, redirect 300/min). The registration limit is configurable via
+`REGISTER_LIMIT_PER_HOUR` (default 5, minimum 1); the other limits are fixed.
 
 ---
 

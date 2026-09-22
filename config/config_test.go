@@ -85,3 +85,34 @@ func TestReleaseRequiresHTTPSExceptLoopback(t *testing.T) {
 		t.Fatalf("loopback release URL should remain available for CI: %v", err)
 	}
 }
+
+func TestRegisterLimitPerHourFromEnvironment(t *testing.T) {
+	t.Setenv("PUBLIC_BASE_URL", "https://short.example.com")
+	t.Setenv("REGISTER_LIMIT_PER_HOUR", "50")
+
+	cfg := NewConfig()
+	if cfg.Security.RegisterLimitPerHour != 50 {
+		t.Fatalf("unexpected register limit: %d", cfg.Security.RegisterLimitPerHour)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid config: %v", err)
+	}
+}
+
+func TestRegisterLimitPerHourDefaultFallbackAndRejectsZero(t *testing.T) {
+	t.Setenv("PUBLIC_BASE_URL", "https://short.example.com")
+
+	if got := NewConfig().Security.RegisterLimitPerHour; got != 5 {
+		t.Fatalf("default register limit = %d, want 5", got)
+	}
+
+	t.Setenv("REGISTER_LIMIT_PER_HOUR", "0")
+	if err := NewConfig().Validate(); err == nil {
+		t.Fatal("expected a register limit of 0 to be rejected")
+	}
+
+	t.Setenv("REGISTER_LIMIT_PER_HOUR", "not-a-number")
+	if got := NewConfig().Security.RegisterLimitPerHour; got != 5 {
+		t.Fatalf("malformed register limit = %d, want fallback 5", got)
+	}
+}

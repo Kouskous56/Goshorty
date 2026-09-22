@@ -70,6 +70,32 @@ The E2E flow verifies:
 
 All E2E data lives only in the disposable CI PostgreSQL service.
 
+### Browser E2E (Playwright) job
+
+The browser job builds the real binary and runs it directly against the
+in-memory development storage (no `DATABASE_URL`, no `GIN_MODE=release`), then
+drives the SPA from a real Chromium through Playwright:
+
+1. sets up Node 22 and installs `@playwright/test` plus Chromium (with system
+   dependencies via `npx playwright install --with-deps chromium`);
+2. starts GoShorty on `:8080` and waits for `/ready`;
+3. runs the `e2e/tests/spa.spec.ts` suite with the `chromium` project
+   (`workers: 1`).
+
+The suite covers:
+
+- the happy path: register → create a short URL → public `/r/:code` redirect →
+  logout → login again;
+- the T7 session-restore regression: a tampered `localStorage` token is
+  rejected on reload with the "Session expired, please login again" message;
+- the admin / regular-user tab split, including the exact admin row in the
+  users table.
+
+It is a real-browser, black-box SPA check on top of the API-level E2E. The job
+sets `REGISTER_LIMIT_PER_HOUR: 50` so the three registrations per run (plus any
+Playwright retries) stay far below the production default of 5/hour — this
+keeps the suite deterministic without weakening the production limit.
+
 ## Running tests locally
 
 ### Unit tests
@@ -117,6 +143,35 @@ bash scripts/e2e.sh http://127.0.0.1:8080
 ```
 
 The script requires `bash`, `curl`, and `jq`.
+
+### Browser E2E (local)
+
+Serve the app from a terminal (in-memory dev mode, no database needed):
+
+```powershell
+$env:SECRET_KEY='dev-only-secret-key-0123456789'
+$env:ADMIN_PASSWORD='admin123'
+$env:ADMIN_EMAIL='admin@local.test'
+$env:PUBLIC_BASE_URL='http://127.0.0.1:8080'
+$env:ALLOWED_ORIGINS='http://127.0.0.1:8080'
+$env:TRUSTED_PROXIES='127.0.0.1'
+$env:REGISTER_LIMIT_PER_HOUR='50'   # default 5/hour is for production
+go run .
+```
+
+From another terminal:
+
+```bash
+cd e2e
+npm install
+npm run test:local        # uses the system Chrome; no browser download
+```
+
+The `local-chrome` project targets the machine's installed Chrome via
+`channel: 'chrome'`. Raise `REGISTER_LIMIT_PER_HOUR` for local runs so repeat
+runs and Playwright retries never hit the production 5/hour/IP registration
+limit; the server holds the counter in memory, so restarting it also resets the
+budget.
 
 ## Coverage policy
 
