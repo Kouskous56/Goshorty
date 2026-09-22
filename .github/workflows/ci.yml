@@ -59,6 +59,13 @@ jobs:
           cache: false
           go-package: ./...
 
+      - name: Generate and upload SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          file: ./dist/goshorty
+          format: spdx-json
+          artifact-name: goshorty-sbom
+
       - name: Publish coverage summary
         if: always()
         run: |
