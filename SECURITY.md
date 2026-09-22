@@ -18,7 +18,7 @@ trusted. PostgreSQL and Railway variables are privileged infrastructure.
 | Short-code race | atomic memory reservation/PostgreSQL unique constraint | Monitor conflict rate |
 | Cross-user data access | owner-scoped queries and admin checks | Keep authorization regression tests |
 | Host/proxy spoofing | validated `PUBLIC_BASE_URL`, trusted proxy allowlist | Review Railway proxy range changes |
-| Browser injection | CSP, nosniff, frame denial, CORS allowlist | Remove inline CSP allowances when frontend is split |
+| Browser injection | strict CSP (`script-src 'self'`, no inline code), nosniff, frame denial, CORS allowlist | Keep the SPA free of inline scripts/handlers (regression-tested) |
 | Oversized/slow requests | body cap and HTTP server timeouts | Apply upstream edge limits too |
 | Open redirect abuse | only stored, validated HTTP(S) destinations | Add reputation controls if service becomes public |
 | Log/metric leakage | route templates; no bodies, auth headers, or raw URLs; metrics Bearer token in release | Restrict platform log access |
@@ -74,6 +74,23 @@ global-revocation mechanism.
 Login performs a real bcrypt comparison against a fixed dummy hash when the
 username does not exist, equalizing response timing to resist timing-based
 username enumeration.
+
+## Browser session handling
+
+The SPA stores the bearer token in `localStorage` (kept deliberately; an
+HttpOnly-cookie migration would require a CSRF defense and a refresh strategy
+and is deferred as future work). To bound the blast radius of a stolen or stale
+token, the frontend:
+
+- validates the session on page load with `GET /api/v1/auth/me` and replaces the
+  cached user object with the server response instead of trusting
+  `localStorage`;
+- treats any `401` on a protected endpoint as an expired session: clears local
+  storage, returns to the login view, and shows a "session expired" notice;
+- never generates inline `<script>` blocks or `onclick` attributes, so the strict
+  `script-src 'self'` Content Security Policy stays effective;
+- targets only the canonical `/api/v1/*` surface (legacy aliases remain
+  server-side for compatibility).
 
 ## Audit events
 

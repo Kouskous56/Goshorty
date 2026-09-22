@@ -164,6 +164,22 @@ type Config struct {
 | 24h | 1 day | Default, general purpose |
 | 168h | 7 days | Long-term references |
 
+### 6. Frontend SPA (`static/`)
+
+**Responsibility:** Browser-side presentation and session handling
+
+| File | Role |
+|---|---|
+| `static/index.html` | Markup only — no inline `<script>` or event-handler attributes |
+| `static/css/style.css` | Stylesheet extracted from the SPA |
+| `static/js/app.js` | IIFE (`'use strict'`); `API_BASE = '/api/v1'`; `restoreSession()` validates the stored token on load via `GET /auth/me`; `apiFetch()` attaches the bearer header and converts any non-auth `401` into a session-expired logout; action buttons use event delegation through `data-action` attributes |
+
+Static assets are embedded with `go:embed static/*` and mounted at `/static`
+(`fs.Sub` + `router.StaticFS`); the SPA root is served at `/` by the NoRoute
+fallback. Because `net/http`'s FileServer redirects any `/index.html` URL to
+its parent directory (golang.org/issue/11857), the SPA index is intentionally
+served only through `/`.
+
 ## Data Flow
 
 ### Creating a Short URL

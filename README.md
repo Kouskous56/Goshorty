@@ -43,6 +43,15 @@ GoShorty/
 ├── utils/
 │   └── random.go         # Utility functions
 ├── go.mod                # Go module file
+├── middleware.go         # Security headers, CORS, request body limits
+├── observability.go      # Structured logs, metrics, panic recovery
+├── api_spec.go           # Embedded OpenAPI 3.1 document + route
+├── main_test.go          # Route-layer and SPA fallback tests
+├── frontend_test.go      # SPA asset regression tests
+├── static/
+│   ├── index.html        # SPA markup (no inline script/style)
+│   ├── css/style.css     # SPA stylesheet
+│   └── js/app.js         # SPA logic — canonical /api/v1, session restore
 └── README.md             # This file
 ```
 
@@ -352,6 +361,16 @@ console.log(data.short_url);
   comma-separated `TRUSTED_PROXIES`
 - HTTP timeouts: 5s headers, 15s read/write, 60s idle
 
+### Frontend (SPA)
+
+- Single-page app served from the embedded `static/` tree: markup
+  (`index.html`), stylesheet (`static/css/style.css`) and logic
+  (`static/js/app.js`) are split; no inline `<script>` or `onclick`.
+- Targets the canonical `/api/v1/*` surface.
+- Validates the stored session on load via `GET /api/v1/auth/me` and handles
+  `401` globally as an expired session (auto logout).
+- Runs under the strict `script-src 'self'` Content Security Policy.
+
 ### Concurrency
 
 - Thread-safe operations using `sync.RWMutex`
@@ -383,6 +402,7 @@ Request → Router → Handler → Service → Storage
 - [x] Database persistence (PostgreSQL)
 - [x] User authentication and role-based access
 - [x] Analytics dashboard
+- [x] Frontend session hardening (session restore, strict CSP, asset split)
 - [ ] Batch URL shortening
 - [ ] QR code generation
 - [ ] URL preview feature
