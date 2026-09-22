@@ -49,7 +49,7 @@ GoShorty/
 ## Installation
 
 ### Prerequisites
-- Go 1.26.5 or higher (includes required standard-library security fixes)
+- Go 1.26.8 or higher (includes required standard-library security fixes)
 - Windows, macOS, or Linux
 
 ### Setup

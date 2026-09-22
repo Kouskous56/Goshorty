@@ -29,8 +29,9 @@ The quality job performs:
 The current local aggregate coverage is above the initial 30% floor. This floor
 is a regression guard, not the final target. Raise it as coverage improves.
 
-CI and production are pinned to Go 1.26.5 because earlier 1.26 patch releases
-contain reachable standard-library vulnerabilities reported by `govulncheck`.
+CI and production are pinned to Go 1.26.8 because earlier 1.26 patch releases
+(≤ 1.26.5) contain reachable standard-library vulnerabilities reported by
+`govulncheck` (fixed in 1.26.6).
 
 ### Race detector job
 

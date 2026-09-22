@@ -54,7 +54,7 @@ revision, and `X-Request-ID`.
 
 ## Dependency vulnerability posture
 
-Baseline scan on 2026-09-22 with `govulncheck` v1.8.0 (Go 1.27.0, `vuln.go.dev`
+Baseline scan on 2026-09-22 (pre-T2) with `govulncheck` v1.8.0 (Go 1.27.0, `vuln.go.dev`
 database last modified 2026-09-16), run in both source (`./...`) and binary
 modes. Result: **exit 0 — 0 reachable (called) vulnerabilities**. The scan
 reported 41 finding instances covering **32 unique advisories**, all in
@@ -70,8 +70,26 @@ packages outside the exercised call graph (bcrypt, Gin, pgx).
 <sup>1</sup> The severe SSH cluster (CVE-2026-39827…39835 incl. the critical
 CVE-2026-39830 deadlock) lives in `golang.org/x/crypto/ssh`, `ssh/agent`, and
 `ssh/knownhosts`. GoShorty imports only `golang.org/x/crypto/bcrypt`, so these
-symbols are unreachable; the cluster is still fixed in T2 to keep the tree
-clean for future code.
+symbols are unreachable; the cluster was fixed in T2 (`x/crypto` v0.57.0).
+
+### Post-upgrade re-scan (2026-09-22, Task 2)
+
+Dependencies upgraded to the newest releases (gin v1.12.0, pgx/v5 v5.11.0,
+`x/crypto` v0.57.0, `x/net` v0.59.0, `x/sys` v0.48.0, `x/text` v0.42.0,
+protobuf v1.36.12, validator v10.30.5, sonic v1.15.4, quic-go v0.59.1, plus
+follow-on indirects; `go` directive, CI, Docker, and `.tool-versions` now at
+1.26.8). Re-scan with `govulncheck` v1.8.0: **exit 0 in both source and
+binary modes** — a single residual unreachable advisory remains:
+
+| Advisory | Module | Why it remains |
+|---|---|---|
+| GO-2026-5932 | `golang.org/x/crypto/openpgp` | Deprecated "unsafe by design" upstream; GoShorty has no use for it (imports only bcrypt) and no fixed release exists to move to |
+
+All 32 baseline module advisories and the four toolchain advisories are
+resolved by this upgrade; the same database notes `quic-go` < v0.59.1 and
+`go.mongodb.org/mongo-driver` GSSAPI issues for modules kept only in the
+module graph (they are not linked into the binary — verified with
+`go list -deps`).
 
 ### Standard library (toolchain)
 

@@ -5,7 +5,7 @@ production. Only environment variables and external infrastructure differ.
 
 ## Required toolchain
 
-- Go 1.26.5
+- Go 1.26.8
 - Git
 - Docker Desktop or Docker Engine with Compose v2
 - Bash for the portable scripts, or Windows PowerShell 5.1+/PowerShell 7
@@ -121,7 +121,7 @@ GitHub Actions creates an ephemeral PostgreSQL 16 service and supplies all
 variables inside the job. CI does not require repository secrets because every
 credential is test-only and the database is destroyed with the runner.
 
-CI uses Go 1.26.5 and runs:
+CI uses Go 1.26.8 and runs:
 
 - module verification;
 - formatting and vet;
