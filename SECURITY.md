@@ -73,6 +73,23 @@ CVE-2026-39830 deadlock) lives in `golang.org/x/crypto/ssh`, `ssh/agent`, and
 symbols are unreachable; the cluster is still fixed in T2 to keep the tree
 clean for future code.
 
+### Standard library (toolchain)
+
+The first CI run on this baseline also scanned the pinned toolchain's
+standard library. Go 1.26.5 was affected by four reachable advisories, all
+fixed in `go1.26.6`:
+
+| Advisory | Package | Issue |
+|---|---|---|
+| GO-2026-6090 | `crypto/tls` | unlimited post-handshake messages |
+| GO-2026-6089 | `net/http` | missing `ReadHeaderTimeout` on unencrypted HTTP/2 check |
+| GO-2026-6088 | `encoding/xml` | unbounded recursion during decode |
+| GO-2026-5972 | `encoding/asn1` | unbounded recursion depth |
+
+CI now pins the newest 1.26 patch (`1.26.8`). Policy: keep the toolchain on
+the newest patch of the declared minor; advance the minor (`go` directive in
+`go.mod`, CI inputs, Dockerfile) as part of the task that requires it.
+
 ### Mitigation and patch policy
 
 - Keep every module at the newest patch via Dependabot (`.github/dependabot.yml`,
