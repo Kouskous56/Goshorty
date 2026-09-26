@@ -33,6 +33,25 @@ Suggested alerts:
 - repeated process restarts;
 - database volume approaches its storage limit.
 
+## Profiling (pprof)
+
+Go runtime profiling is **off by default**. Application internals (heap dumps,
+goroutine stacks, CPU profiles) are served under `/debug/pprof/*` only when
+`PPROF_ENABLED=true` is set; the process prints a startup warning when it is
+enabled.
+
+These endpoints expose the live process and must never be reachable from the
+public internet. Use them only in development, or in production from a private
+network or an authenticated sidecar. Typical use:
+
+```bash
+curl -s "http://localhost:8080/debug/pprof/heap" -o heap.out
+go tool pprof heap.out
+```
+
+`/debug/pprof/profile` samples the CPU for 30 seconds and `/debug/pprof/trace`
+runs a 1-second execution trace; both block their request for that duration.
+
 ## Local backup and restore drill
 
 Create a custom-format PostgreSQL backup:

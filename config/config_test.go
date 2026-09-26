@@ -116,3 +116,28 @@ func TestRegisterLimitPerHourDefaultFallbackAndRejectsZero(t *testing.T) {
 		t.Fatalf("malformed register limit = %d, want fallback 5", got)
 	}
 }
+
+func TestPprofDisabledByDefault(t *testing.T) {
+	t.Setenv("PPROF_ENABLED", "")
+	if NewConfig().Ops.PprofEnabled {
+		t.Fatal("pprof must be disabled by default")
+	}
+}
+
+func TestPprofEnabledFromEnvironment(t *testing.T) {
+	for _, value := range []string{"true", "1", "yes", "on", " true ", "TRUE"} {
+		t.Setenv("PPROF_ENABLED", value)
+		if !NewConfig().Ops.PprofEnabled {
+			t.Fatalf("PPROF_ENABLED=%s should enable pprof", value)
+		}
+	}
+}
+
+func TestPprofIgnoresNonExplicitValues(t *testing.T) {
+	for _, value := range []string{"false", "0", "no", "off", "garbage", "TRUE_", ""} {
+		t.Setenv("PPROF_ENABLED", value)
+		if NewConfig().Ops.PprofEnabled {
+			t.Fatalf("PPROF_ENABLED=%q must leave pprof disabled", value)
+		}
+	}
+}

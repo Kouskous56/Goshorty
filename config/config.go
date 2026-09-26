@@ -15,6 +15,7 @@ type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Security SecurityConfig
+	Ops      OpsConfig
 	TTL      TTLConfig
 }
 
@@ -44,6 +45,15 @@ type SecurityConfig struct {
 // TTLConfig holds TTL duration settings
 type TTLConfig struct {
 	Options map[string]time.Duration
+}
+
+// OpsConfig holds operational and debugging surface settings.
+type OpsConfig struct {
+	// PprofEnabled opts the Go runtime profiling endpoints (/debug/pprof/*)
+	// in. These endpoints expose runtime internals and must never be reachable
+	// from the public internet, so they stay off unless explicitly enabled
+	// with PPROF_ENABLED=true.
+	PprofEnabled bool
 }
 
 func portFromEnv(defaultPort string) string {
@@ -87,6 +97,9 @@ func NewConfig() *Config {
 			TokenIssuer:          os.Getenv("TOKEN_ISSUER"),
 			TokenAudience:        os.Getenv("TOKEN_AUDIENCE"),
 			RegisterLimitPerHour: intFromEnv("REGISTER_LIMIT_PER_HOUR", 5),
+		},
+		Ops: OpsConfig{
+			PprofEnabled: boolFromEnv("PPROF_ENABLED"),
 		},
 		TTL: TTLConfig{
 			Options: map[string]time.Duration{
@@ -137,6 +150,18 @@ func intFromEnv(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// boolFromEnv parses key as an explicit boolean (true/1/yes/on). Everything
+// else — including an empty value — stays false, so sensitive surfaces that
+// are governed by this helper default to disabled unless explicitly enabled.
+func boolFromEnv(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Validate verifies configuration values that affect externally visible URLs.
