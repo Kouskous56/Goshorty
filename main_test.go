@@ -224,8 +224,14 @@ func TestStatistics(t *testing.T) {
 // (registerAPIGroup for /api and /api/v1, health aliases, redirect routes and
 // the NoRoute fallback) for route-layer tests.
 func newTestAPIRouter() (*gin.Engine, *services.URLService) {
+	return newTestAPIRouterCfg(config.NewConfig())
+}
+
+// newTestAPIRouterCfg builds the exact production route surface through the
+// same builder main() uses — including the observable/middleware chain — with
+// a caller-supplied configuration (e.g. opt-in surfaces such as pprof).
+func newTestAPIRouterCfg(cfg *config.Config) (*gin.Engine, *services.URLService) {
 	gin.SetMode(gin.TestMode)
-	cfg := config.NewConfig()
 
 	urlStore := storage.NewStorage()
 	urlService := services.NewURLService(urlStore, cfg)
@@ -238,10 +244,6 @@ func newTestAPIRouter() (*gin.Engine, *services.URLService) {
 	authHandler := handlers.NewAuthHandler(userStore, tokenService)
 	h := handlers.NewHandler(urlService)
 
-	// Build the exact production route surface through the same builder main()
-	// uses, so every main-level test exercises the real wiring (observability,
-	// CORS, security headers, body limits, static assets) instead of a
-	// hand-rolled twin that could drift from production.
 	router, err := newAppRouter(cfg, slog.New(slog.DiscardHandler), h, authHandler, NewHTTPMetrics(), appRouterAssets{version: "test-build"})
 	if err != nil {
 		panic(err)

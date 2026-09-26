@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net/http"
 	"net/http/pprof"
 
 	"github.com/gin-gonic/gin"
@@ -24,13 +23,13 @@ var pprofProfiles = []string{
 // process and must never be reachable from the public internet.
 func registerPprof(router *gin.Engine) {
 	group := router.Group("/debug/pprof")
-	group.GET("", gin.WrapH(pprof.Index))
-	group.GET("/", gin.WrapH(pprof.Index))
-	group.GET("/cmdline", gin.WrapH(pprof.Cmdline))
-	group.GET("/profile", gin.WrapH(pprof.Profile))
-	group.GET("/symbol", gin.WrapH(pprof.Symbol))
-	group.POST("/symbol", gin.WrapH(pprof.Symbol))
-	group.GET("/trace", gin.WrapH(pprof.Trace))
+	group.GET("", gin.WrapF(pprof.Index))
+	group.GET("/", gin.WrapF(pprof.Index))
+	group.GET("/cmdline", gin.WrapF(pprof.Cmdline))
+	group.GET("/profile", gin.WrapF(pprof.Profile))
+	group.GET("/symbol", gin.WrapF(pprof.Symbol))
+	group.POST("/symbol", gin.WrapF(pprof.Symbol))
+	group.GET("/trace", gin.WrapF(pprof.Trace))
 	for _, name := range pprofProfiles {
 		group.GET("/"+name, gin.WrapH(pprof.Handler(name)))
 	}

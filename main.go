@@ -271,6 +271,14 @@ func newAppRouter(
 	// OpenAPI 3.1 specification (embedded JSON document).
 	registerOpenAPI(router)
 
+	// Optional Go runtime profiling surface (heap dumps, goroutine stacks, CPU
+	// profiles). Opt-in via PPROF_ENABLED=true and never meant for the public
+	// internet; the startup warning makes an accidental enable obvious.
+	if cfg.Ops.PprofEnabled {
+		logger.Warn("pprof profiling endpoints are enabled (PPROF_ENABLED=true); do not expose /debug/pprof publicly")
+		registerPprof(router)
+	}
+
 	// Serve index.html for all other routes (SPA fallback)
 	router.NoRoute(func(c *gin.Context) {
 		// For API requests, return 404
