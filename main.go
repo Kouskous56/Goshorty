@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"log/slog"
@@ -131,78 +132,18 @@ func main() {
 	h := handlers.NewHandlerWithHealth(urlService, healthChecker)
 	authHandler := handlers.NewAuthHandler(userStorage, tokenService)
 
-	// Create Gin router
-	router := gin.New()
-	if err := router.SetTrustedProxies(cfg.Security.TrustedProxies); err != nil {
-		log.Fatalf("Invalid TRUSTED_PROXIES configuration: %v", err)
-	}
-
-	// Middleware
+	// Create Gin router. Assembly lives in newAppRouter so tests can mount the
+	// exact production route surface and cross-check it against the OpenAPI
+	// spec (see TestOpenAPISpecMatchesRegisteredRoutes).
 	metrics := NewHTTPMetrics()
-	router.Use(observabilityMiddleware(logger, metrics))
-	router.Use(structuredRecovery(logger))
-	router.Use(securityHeadersMiddleware())
-	router.Use(corsMiddleware(cfg.Security.AllowedOrigins))
-	router.Use(requestBodyLimitMiddleware(cfg.Security.MaxRequestBytes))
-
-	// Serve embedded static files
-	staticFS, err := fs.Sub(staticFiles, "static")
+	router, err := newAppRouter(cfg, logger, h, authHandler, metrics, appRouterAssets{
+		version:   version,
+		commit:    commit,
+		buildTime: buildTime,
+	})
 	if err != nil {
-		log.Fatalf("Failed to load embedded static files: %v", err)
+		log.Fatalf("Failed to build router: %v", err)
 	}
-	router.StaticFS("/static", http.FS(staticFS))
-
-	// Health and readiness. /health/live and /health/ready are canonical
-	// aliases; /health and /ready remain as backward-compatible endpoints.
-	router.GET("/health", h.Health)
-	router.GET("/health/live", h.Health)
-	router.GET("/ready", h.Ready)
-	router.GET("/health/ready", h.Ready)
-	router.GET("/metrics", metricsAuthMiddleware(cfg.Security.MetricsToken), metrics.Handler)
-	router.GET("/version", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"version":    version,
-			"commit":     commit,
-			"build_time": buildTime,
-		})
-	})
-
-	rateLimiter := handlers.NewRateLimiter()
-
-	// Canonical API v1 and legacy /api aliases. Both share the same handlers;
-	// only the URL-management paths differ (/urls on v1, /shorten on legacy).
-	// The v1 surface adds pagination for list endpoints; legacy keeps the
-	// original response shapes.
-	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/shorten", "/shorten/all", "")
-	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/urls", "/urls", "v1")
-
-	// Canonical compact redirect route. Expiration is authoritative in storage,
-	// so it does not need to be encoded into the public URL.
-	router.GET("/r/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
-
-	// Backward-compatible redirect aliases so previously issued links keep
-	// working (/s/:code and the legacy /goshorty/:timeout/:code format).
-	router.GET("/s/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
-	router.GET("/goshorty/:timeout/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
-
-	// API info endpoints.
-	registerAPIInfo(router, version)
-
-	// OpenAPI 3.1 specification (embedded JSON document).
-	registerOpenAPI(router)
-
-	// Serve index.html for all other routes (SPA fallback)
-	router.NoRoute(func(c *gin.Context) {
-		// For API requests, return 404
-		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
-			c.JSON(404, gin.H{"error": "Not found"})
-			return
-		}
-		// For other routes, serve index.html (SPA)
-		c.Header("Content-Type", "text/html; charset=utf-8")
-		indexData, _ := fs.ReadFile(staticFiles, "static/index.html")
-		c.String(200, string(indexData))
-	})
 
 	// Start server
 	addr := cfg.Server.Port
@@ -250,6 +191,100 @@ func main() {
 
 	closeStorage()
 	log.Println("Server exited cleanly")
+}
+
+// appRouterAssets bundles the build metadata rendered by the /version endpoint.
+type appRouterAssets struct {
+	version   string
+	commit    string
+	buildTime string
+}
+
+// newAppRouter assembles the production Gin router from the initialized
+// services, middleware and storage. It lives outside main() so tests can mount
+// the exact route surface production serves — TestOpenAPISpecMatchesRegisteredRoutes
+// cross-checks every registered route against docs/openapi.json in both
+// directions (registered → spec and spec → registered).
+func newAppRouter(
+	cfg *config.Config,
+	logger *slog.Logger,
+	h *handlers.Handler,
+	authHandler *handlers.AuthHandler,
+	metrics *HTTPMetrics,
+	assets appRouterAssets,
+) (*gin.Engine, error) {
+	router := gin.New()
+	if err := router.SetTrustedProxies(cfg.Security.TrustedProxies); err != nil {
+		return nil, fmt.Errorf("invalid TRUSTED_PROXIES configuration: %w", err)
+	}
+
+	// Middleware
+	router.Use(observabilityMiddleware(logger, metrics))
+	router.Use(structuredRecovery(logger))
+	router.Use(securityHeadersMiddleware())
+	router.Use(corsMiddleware(cfg.Security.AllowedOrigins))
+	router.Use(requestBodyLimitMiddleware(cfg.Security.MaxRequestBytes))
+
+	// Serve embedded static files
+	staticFS, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load embedded static files: %w", err)
+	}
+	router.StaticFS("/static", http.FS(staticFS))
+
+	// Health and readiness. /health/live and /health/ready are canonical
+	// aliases; /health and /ready remain as backward-compatible endpoints.
+	router.GET("/health", h.Health)
+	router.GET("/health/live", h.Health)
+	router.GET("/ready", h.Ready)
+	router.GET("/health/ready", h.Ready)
+	router.GET("/metrics", metricsAuthMiddleware(cfg.Security.MetricsToken), metrics.Handler)
+	router.GET("/version", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"version":    assets.version,
+			"commit":     assets.commit,
+			"build_time": assets.buildTime,
+		})
+	})
+
+	rateLimiter := handlers.NewRateLimiter()
+
+	// Canonical API v1 and legacy /api aliases. Both share the same handlers;
+	// only the URL-management paths differ (/urls on v1, /shorten on legacy).
+	// The v1 surface adds pagination for list endpoints; legacy keeps the
+	// original response shapes.
+	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/shorten", "/shorten/all", "")
+	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/urls", "/urls", "v1")
+
+	// Canonical compact redirect route. Expiration is authoritative in storage,
+	// so it does not need to be encoded into the public URL.
+	router.GET("/r/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
+
+	// Backward-compatible redirect aliases so previously issued links keep
+	// working (/s/:code and the legacy /goshorty/:timeout/:code format).
+	router.GET("/s/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
+	router.GET("/goshorty/:timeout/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
+
+	// API info endpoints.
+	registerAPIInfo(router, assets.version)
+
+	// OpenAPI 3.1 specification (embedded JSON document).
+	registerOpenAPI(router)
+
+	// Serve index.html for all other routes (SPA fallback)
+	router.NoRoute(func(c *gin.Context) {
+		// For API requests, return 404
+		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+			return
+		}
+		// For other routes, serve index.html (SPA)
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		indexData, _ := fs.ReadFile(staticFiles, "static/index.html")
+		c.String(http.StatusOK, string(indexData))
+	})
+
+	return router, nil
 }
 
 // registerAPIInfo mounts the descriptive /api and /api/v1 endpoints.

@@ -9,7 +9,7 @@ import (
 	"goshorty/models"
 	"goshorty/services"
 	"goshorty/storage"
-	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -237,35 +237,15 @@ func newTestAPIRouter() (*gin.Engine, *services.URLService) {
 	tokenService := services.NewTokenService("test-secret-key")
 	authHandler := handlers.NewAuthHandler(userStore, tokenService)
 	h := handlers.NewHandler(urlService)
-	rateLimiter := handlers.NewRateLimiter()
 
-	router := gin.New()
-	registerAPIGroup(router.Group("/api"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/shorten", "/shorten/all", "")
-	registerAPIGroup(router.Group("/api/v1"), authHandler, h, rateLimiter, cfg.Security.RegisterLimitPerHour, "/urls", "/urls", "v1")
-
-	// Embedded static assets, mirrored from prod wiring.
-	staticFS, err := fs.Sub(staticFiles, "static")
+	// Build the exact production route surface through the same builder main()
+	// uses, so every main-level test exercises the real wiring (observability,
+	// CORS, security headers, body limits, static assets) instead of a
+	// hand-rolled twin that could drift from production.
+	router, err := newAppRouter(cfg, slog.New(slog.DiscardHandler), h, authHandler, NewHTTPMetrics(), appRouterAssets{version: "test-build"})
 	if err != nil {
 		panic(err)
 	}
-	router.StaticFS("/static", http.FS(staticFS))
-
-	router.GET("/health", h.Health)
-	router.GET("/health/live", h.Health)
-	router.GET("/ready", h.Ready)
-	router.GET("/health/ready", h.Ready)
-	router.GET("/r/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
-	router.GET("/s/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
-	router.GET("/goshorty/:timeout/:code", rateLimiter.Limit("redirect", 300, time.Minute), h.Redirect)
-	registerAPIInfo(router, "test-build")
-	registerOpenAPI(router)
-	router.NoRoute(func(c *gin.Context) {
-		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
-			return
-		}
-		c.String(http.StatusOK, "index")
-	})
 	return router, urlService
 }
 

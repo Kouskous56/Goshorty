@@ -819,6 +819,31 @@
         }
       }
     },
+    "/static/{filepath}": {
+      "parameters": [
+        {
+          "name": "filepath",
+          "in": "path",
+          "required": true,
+          "description": "Relative path of the embedded asset (e.g. app.js), served from /static",
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "tags": ["Operational"],
+        "summary": "Static asset for the web UI",
+        "description": "Serves the assets embedded at build time (JS, CSS, images) used by the single-page app. Gin registers HEAD for this route as a GET-shaped operation.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The asset contents"
+          },
+          "404": {
+            "description": "Asset not found"
+          }
+        }
+      }
+    },
     "/version": {
       "get": {
         "tags": ["Operational"],

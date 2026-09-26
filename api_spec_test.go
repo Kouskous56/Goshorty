@@ -211,3 +211,83 @@ func TestOpenAPISpecRefsResolve(t *testing.T) {
 		}
 	}
 }
+
+// ginPatternToOpenAPI converts a Gin route pattern (/api/v1/urls/:code,
+// /static/*filepath) into the OpenAPI {param} form used by the spec document.
+func ginPatternToOpenAPI(p string) string {
+	parts := strings.Split(p, "/")
+	for i, part := range parts {
+		if part != "" && (part[0] == ':' || part[0] == '*') {
+			parts[i] = "{" + part[1:] + "}"
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+// routerHasRouteFor reports whether the engine registered method + specPath
+// (spec paths use {param}; the engine registers :param / *param patterns).
+func routerHasRouteFor(router *gin.Engine, method, specPath string) bool {
+	for _, rt := range router.Routes() {
+		if rt.Method == method && ginPatternToOpenAPI(rt.Path) == specPath {
+			return true
+		}
+	}
+	return false
+}
+
+// TestOpenAPISpecMatchesRegisteredRoutes proves the spec and the router agree
+// in both directions: every route the production builder registers (via
+// newTestAPIRouter → newAppRouter) is described in the document with its
+// method, and every spec operation resolves to a live route. This is the
+// drift guard between docs/openapi.json and main.go's route assembly.
+func TestOpenAPISpecMatchesRegisteredRoutes(t *testing.T) {
+	router, _ := newTestAPIRouter()
+	spec := fetchOpenAPISpec(t, router)
+	paths, _ := spec["paths"].(map[string]any)
+
+	// Collapse HEAD into GET: Gin serves HEAD for GET routes it registers on
+	// the static file server; the spec describes the GET-shaped operation.
+	registered := make(map[string]map[string]bool)
+	for _, rt := range router.Routes() {
+		method := rt.Method
+		if method == "HEAD" {
+			method = "GET"
+		}
+		sp := ginPatternToOpenAPI(rt.Path)
+		if registered[sp] == nil {
+			registered[sp] = make(map[string]bool)
+		}
+		registered[sp][method] = true
+	}
+
+	// Every registered route must exist in the spec (path and method).
+	for sp, methods := range registered {
+		item, ok := paths[sp].(map[string]any)
+		if !ok {
+			t.Errorf("router registers %q but OpenAPI spec has no such path", sp)
+			continue
+		}
+		for method := range methods {
+			if _, ok := item[strings.ToLower(method)]; !ok {
+				t.Errorf("router registers %s %q but the OpenAPI spec has no %s operation for it", method, sp, strings.ToLower(method))
+			}
+		}
+	}
+
+	// Every spec operation must be a live route.
+	for sp, item := range paths {
+		m, ok := item.(map[string]any)
+		if !ok {
+			t.Errorf("path %q: expected a path item object, got %T", sp, item)
+			continue
+		}
+		for _, method := range []string{"get", "post", "put", "delete"} {
+			if _, ok := m[method]; !ok {
+				continue
+			}
+			if !routerHasRouteFor(router, strings.ToUpper(method), sp) {
+				t.Errorf("spec documents %s %q but the router does not register it", strings.ToUpper(method), sp)
+			}
+		}
+	}
+}
