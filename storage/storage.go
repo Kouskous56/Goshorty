@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -130,6 +131,42 @@ func (s *Storage) GetAllFor(userID, role string) ([]*models.URLData, error) {
 	}
 
 	return results, nil
+}
+
+// ListURLs returns a single keyset page (newest first) of active URLs visible
+// to the caller. The in-memory store scans the map, but the filtering, sort
+// and page slicing follow the same keyset semantics as the Postgres backend
+// so every store implementation agrees on ordering and cursors.
+func (s *Storage) ListURLs(userID, role string, cursor models.URLCursor, limit int) (URLListResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now()
+	visible := make([]*models.URLData, 0, len(s.data))
+	for _, entry := range s.data {
+		if now.After(entry.ExpiresAt) {
+			continue
+		}
+		if role != models.RoleAdmin && entry.Data.CreatedBy != userID {
+			continue
+		}
+		visible = append(visible, cloneURLData(entry.Data))
+	}
+	sort.SliceStable(visible, func(i, j int) bool { return visible[i].NewerThan(visible[j]) })
+
+	total := len(visible)
+	start := 0
+	if cursor.CreatedAtUnixNano != 0 || cursor.ShortCode != "" {
+		start = sort.Search(total, func(i int) bool { return visible[i].AfterKeyset(cursor) })
+	}
+	if start >= total {
+		return URLListResult{Items: []*models.URLData{}, Total: total, HasMore: false}, nil
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	return URLListResult{Items: visible[start:end], Total: total, HasMore: end < total}, nil
 }
 
 // cleanupExpired removes expired entries periodically

@@ -187,39 +187,54 @@ func validPasswordLength(password string) bool {
 // is paginated and sorted by username; the legacy /api/auth/users alias keeps
 // the same response shape.
 func (ah *AuthHandler) GetAllUsers(c *gin.Context) {
-	users, err := ah.userStorage.GetAllUsers()
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list users")
-		return
-	}
-
 	if c.GetString("api_version") == "v1" {
 		opts, ok := parseListOptions(c)
 		if !ok {
 			writeError(c, http.StatusBadRequest, "INVALID_LIMIT", "limit must be a positive integer")
 			return
 		}
-		page, err := services.PaginateUsers(users, opts)
-		if err != nil {
-			if errors.Is(err, services.ErrInvalidCursor) {
+		limit := services.NormalizeLimit(opts.Limit)
+
+		var cursor models.UserCursor
+		if opts.Cursor != "" {
+			if err := models.DecodeCursor(opts.Cursor, &cursor); err != nil {
 				writeError(c, http.StatusBadRequest, "INVALID_CURSOR", "cursor is invalid or expired")
 				return
 			}
+			if cursor.Username == "" {
+				writeError(c, http.StatusBadRequest, "INVALID_CURSOR", "cursor is invalid or expired")
+				return
+			}
+		}
+
+		res, err := ah.userStorage.ListUsers(cursor, limit)
+		if err != nil {
 			writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list users")
 			return
 		}
 		resp := gin.H{
-			"users": page.Users,
-			"total": page.Total,
+			"users": res.Items,
+			"total": res.Total,
 		}
-		if page.HasMore {
-			resp["next_cursor"] = page.NextCursor
+		if res.HasMore && len(res.Items) > 0 {
+			last := res.Items[len(res.Items)-1]
+			enc, err := models.EncodeCursor(models.UserCursor{Username: last.Username})
+			if err != nil {
+				writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list users")
+				return
+			}
+			resp["next_cursor"] = enc
 		}
 		c.JSON(http.StatusOK, resp)
 		return
 	}
 
 	// Legacy surface: stable ordering by username, same response shape.
+	users, err := ah.userStorage.GetAllUsers()
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "LIST_FAILED", "Failed to list users")
+		return
+	}
 	sort.SliceStable(users, func(i, j int) bool {
 		return users[i].Username < users[j].Username
 	})

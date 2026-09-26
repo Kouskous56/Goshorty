@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -197,6 +198,34 @@ func (us *UserStorage) GetAllUsers() ([]*models.User, error) {
 	}
 
 	return users, nil
+}
+
+// ListUsers returns a single keyset page (username ASC) of all users. The
+// in-memory store scans the map, but keeps the same keyset semantics as the
+// Postgres backend so cursors are portable between stores.
+func (us *UserStorage) ListUsers(cursor models.UserCursor, limit int) (UserListResult, error) {
+	us.mu.RLock()
+	defer us.mu.RUnlock()
+
+	all := make([]*models.User, 0, len(us.byID))
+	for _, user := range us.byID {
+		all = append(all, cloneUser(user))
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Username < all[j].Username })
+
+	total := len(all)
+	start := 0
+	if cursor.Username != "" {
+		start = sort.Search(total, func(i int) bool { return all[i].Username > cursor.Username })
+	}
+	if start >= total {
+		return UserListResult{Items: []*models.User{}, Total: total, HasMore: false}, nil
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	return UserListResult{Items: all[start:end], Total: total, HasMore: end < total}, nil
 }
 
 // DeleteUser deletes a user
