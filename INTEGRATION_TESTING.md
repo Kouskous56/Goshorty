@@ -139,6 +139,14 @@ first use):
 EMBEDDED_PG=1 go test ./storage -count=1 -v
 ```
 
+> **Windows note (file lock):** the embedded runtime unpacks to a shared
+> directory under `~/.embedded-postgres-go`. If a `cmd/localdb` instance (or
+> another embedded-PG process) is already running, the test runtime cannot
+> delete `icudt77.dll` on teardown and fails with `Access is denied`. Stop the
+> `localdb` process **and its `postgres.exe` children** before running the
+> embedded suite, then restart `localdb` afterwards (data is not affected —
+> PostgreSQL recovers on startup).
+
 Each PostgreSQL test creates and later removes its own random schema. Never point
 `TEST_DATABASE_URL` at a production database.
 
