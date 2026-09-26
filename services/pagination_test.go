@@ -5,22 +5,57 @@ import (
 	"testing"
 	"time"
 
+	"goshorty/config"
 	"goshorty/models"
+	"goshorty/storage"
 )
 
-func fixtureURLs() []*models.URLData {
-	t := time.Unix(1700000000, 0)
+// seedMemoryURLs populates a fresh in-memory store with the given URLs.
+func seedMemoryURLs(t *testing.T, urls []*models.URLData) *storage.Storage {
+	t.Helper()
+	store := storage.NewStorage()
+	t.Cleanup(store.Stop)
+	for _, u := range urls {
+		if err := store.SetIfAbsent(u.ShortCode, u); err != nil {
+			t.Fatalf("seed %s: %v", u.ShortCode, err)
+		}
+	}
+	return store
+}
+
+func memoryURLService(t *testing.T, urls []*models.URLData) *URLService {
+	t.Helper()
+	return NewURLService(seedMemoryURLs(t, urls), config.NewConfig())
+}
+
+// fixtureURLData returns URLs ordered (created_at DESC, short_code ASC):
+// x, a, b, c, d — where a/b share a timestamp (code tie-break) and x belongs
+// to a different owner to exercise ownership scoping.
+func fixtureURLData() []*models.URLData {
+	base := time.Unix(1700000000, 0).UTC()
+	mk := func(code string, created time.Time, owner string) *models.URLData {
+		return &models.URLData{
+			ID:          code + "-id",
+			ShortCode:   code,
+			OriginalURL: "https://example.com/" + code,
+			ExpiresIn:   "24h",
+			ExpiresAt:   time.Now().Add(24 * time.Hour),
+			CreatedAt:   created,
+			CreatedBy:   owner,
+		}
+	}
 	return []*models.URLData{
-		{ShortCode: "b", CreatedAt: t.Add(30 * time.Second)},
-		{ShortCode: "a", CreatedAt: t.Add(30 * time.Second)}, // same time: code tie-break
-		{ShortCode: "c", CreatedAt: t.Add(20 * time.Second)},
-		{ShortCode: "d", CreatedAt: t.Add(10 * time.Second)},
+		mk("x", base.Add(40*time.Second), "other-user"),
+		mk("b", base.Add(30*time.Second), "owner-user"),
+		mk("a", base.Add(30*time.Second), "owner-user"),
+		mk("c", base.Add(20*time.Second), "owner-user"),
+		mk("d", base.Add(10*time.Second), "owner-user"),
 	}
 }
 
-func codes(page []*models.URLData) string {
+func pageCodes(page URLPage) string {
 	var sb strings.Builder
-	for _, u := range page {
+	for _, u := range page.URLs {
 		sb.WriteString(u.ShortCode)
 	}
 	return sb.String()
@@ -42,139 +77,97 @@ func TestNormalizeLimit(t *testing.T) {
 	}
 }
 
-func TestPaginateURLsDefaultsToFirstPage(t *testing.T) {
-	page, err := PaginateURLs(fixtureURLs(), ListOptions{})
+func TestListURLsFirstPageOrderAndMetadata(t *testing.T) {
+	svc := memoryURLService(t, fixtureURLData())
+	page, err := svc.ListURLs("owner-user", models.RoleUser, ListOptions{Limit: 2})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("list: %v", err)
+	}
+	if got := pageCodes(page); got != "ab" {
+		t.Fatalf("page = %q, want ab (created_at DESC, short_code ASC tie-break)", got)
 	}
 	if page.Total != 4 {
-		t.Errorf("total = %d, want 4", page.Total)
+		t.Errorf("total = %d, want 4 (other-user URL excluded)", page.Total)
 	}
-	if page.HasMore {
-		t.Error("hasMore = true on a single-page result")
-	}
-	if page.NextCursor != "" {
-		t.Errorf("next_cursor = %q, want empty", page.NextCursor)
-	}
-	if got := codes(page.URLs); got != "abcd" {
-		t.Errorf("order = %q, want abcd (created_at DESC, short_code ASC tie-break)", got)
+	if !page.HasMore || page.NextCursor == "" {
+		t.Fatalf("page metadata wrong: hasMore=%v next=%q", page.HasMore, page.NextCursor)
 	}
 }
 
-func TestPaginateURLsCursorWalk(t *testing.T) {
-	// Page 1 (limit 2): a, b — newest first with the same-timestamp
-	// tie-break applied.
-	page1, err := PaginateURLs(fixtureURLs(), ListOptions{Limit: 2})
+func TestListURLsCursorWalk(t *testing.T) {
+	svc := memoryURLService(t, fixtureURLData())
+	page1, err := svc.ListURLs("owner-user", models.RoleUser, ListOptions{Limit: 2})
 	if err != nil {
 		t.Fatalf("page 1: %v", err)
 	}
-	if got := codes(page1.URLs); got != "ab" {
+	if got := pageCodes(page1); got != "ab" {
 		t.Fatalf("page 1 = %q, want ab", got)
 	}
-	if page1.Total != 4 || !page1.HasMore || page1.NextCursor == "" {
-		t.Fatalf("page 1 metadata wrong: total=%d hasMore=%v next=%q", page1.Total, page1.HasMore, page1.NextCursor)
-	}
 
-	// Page 2 via cursor: c, d and no further cursor.
-	page2, err := PaginateURLs(fixtureURLs(), ListOptions{Limit: 2, Cursor: page1.NextCursor})
+	page2, err := svc.ListURLs("owner-user", models.RoleUser, ListOptions{Limit: 2, Cursor: page1.NextCursor})
 	if err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
-	if got := codes(page2.URLs); got != "cd" {
+	if got := pageCodes(page2); got != "cd" {
 		t.Fatalf("page 2 = %q, want cd", got)
 	}
-	if page2.HasMore || page2.NextCursor != "" || page2.Total != 4 {
-		t.Fatalf("page 2 metadata wrong: total=%d hasMore=%v next=%q", page2.Total, page2.HasMore, page2.NextCursor)
+	if page2.HasMore || page2.NextCursor != "" {
+		t.Fatalf("page 2 metadata wrong: hasMore=%v next=%q", page2.HasMore, page2.NextCursor)
+	}
+	if page2.Total != 4 {
+		t.Errorf("page 2 total = %d, want 4", page2.Total)
 	}
 }
 
-func TestPaginateURLsCursorBeyondEndReturnsEmptyPage(t *testing.T) {
-	page1, _ := PaginateURLs(fixtureURLs(), ListOptions{Limit: 4})
-	page2, err := PaginateURLs(fixtureURLs(), ListOptions{Cursor: page1.NextCursor})
+func TestListURLsAdminSeesEverything(t *testing.T) {
+	svc := memoryURLService(t, fixtureURLData())
+	page, err := svc.ListURLs("", models.RoleAdmin, ListOptions{Limit: 2})
 	if err != nil {
-		t.Fatalf("walk past end: %v", err)
+		t.Fatalf("list: %v", err)
 	}
-	// cursor from last page is empty; passing it behaves like first page,
-	// which is a full-size page here.
-	if got := codes(page2.URLs); got != "abcd" {
-		t.Fatalf("empty-cursor passthrough page = %q, want abcd", got)
+	if got := pageCodes(page); got != "xa" {
+		t.Fatalf("admin page = %q, want xa (newest first)", got)
+	}
+	if page.Total != 5 {
+		t.Errorf("admin total = %d, want 5", page.Total)
 	}
 }
 
-func TestPaginateURLsInvalidCursor(t *testing.T) {
-	bad := []string{"!!!not-base64!!!", "YWJjZA", "e30", "eyJjIjowLCJzIjoiIn0"} // garbage / wrong shape / zero key
-	if enc, err := EncodeCursor(URLCursor{}); err == nil {
+func TestListURLsInvalidCursor(t *testing.T) {
+	svc := memoryURLService(t, fixtureURLData())
+	bad := []string{"!!!not-base64!!!", "YWJjZA", "e30"}
+	if enc, err := models.EncodeCursor(models.URLCursor{}); err == nil {
 		bad = append(bad, enc)
 	}
 	for _, c := range bad {
-		if _, err := PaginateURLs(fixtureURLs(), ListOptions{Cursor: c}); err != ErrInvalidCursor {
+		if _, err := svc.ListURLs("owner-user", models.RoleUser, ListOptions{Cursor: c}); err != ErrInvalidCursor {
 			t.Errorf("cursor %q: err = %v, want ErrInvalidCursor", c, err)
 		}
 	}
 }
 
-func TestPaginateURLsLimitCappedAtMax(t *testing.T) {
-	fx := fixtureURLs()
-	for range [MaxPageLimit + 5]struct{}{} {
-		fx = append(fx, &models.URLData{ShortCode: "x", CreatedAt: time.Unix(1, 0)})
+func TestListURLsCursorPastEndReturnsEmptyPage(t *testing.T) {
+	svc := memoryURLService(t, fixtureURLData())
+	all, err := svc.ListURLs("owner-user", models.RoleUser, ListOptions{Limit: 10})
+	if err != nil || len(all.URLs) != 4 {
+		t.Fatalf("full page = %d items, err=%v", len(all.URLs), err)
 	}
-	page, err := PaginateURLs(fx, ListOptions{Limit: 99999})
+	last := all.URLs[len(all.URLs)-1]
+	past, err := models.EncodeCursor(models.URLCursor{
+		CreatedAtUnixNano: last.CreatedAt.UnixNano(),
+		ShortCode:         last.ShortCode,
+	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("encode cursor: %v", err)
 	}
-	if len(page.URLs) != MaxPageLimit {
-		t.Errorf("page size = %d, want capped at %d", len(page.URLs), MaxPageLimit)
-	}
-	if page.Total != 4+MaxPageLimit+5 {
-		t.Errorf("total = %d, want %d", page.Total, 4+MaxPageLimit+5)
-	}
-}
-
-func TestPaginateUsersSortedAndWalk(t *testing.T) {
-	users := []*models.User{
-		{Username: "zeta"},
-		{Username: "alpha"},
-		{Username: "beta"},
-	}
-	page1, err := PaginateUsers(users, ListOptions{Limit: 2})
+	page, err := svc.ListURLs("owner-user", models.RoleUser, ListOptions{Cursor: past})
 	if err != nil {
-		t.Fatalf("page 1: %v", err)
+		t.Fatalf("cursor past end: %v", err)
 	}
-	if len(page1.Users) != 2 || page1.Users[0].Username != "alpha" || page1.Users[1].Username != "beta" {
-		t.Fatalf("page 1 = %v, want [alpha beta]", userNames(page1.Users))
+	if len(page.URLs) != 0 || page.HasMore {
+		t.Fatalf("past-end page: %d items, hasMore=%v — want empty", len(page.URLs), page.HasMore)
 	}
-	if page1.Total != 3 || !page1.HasMore || page1.NextCursor == "" {
-		t.Fatalf("page 1 metadata wrong: total=%d hasMore=%v next=%q", page1.Total, page1.HasMore, page1.NextCursor)
+	if page.Total != 4 {
+		t.Errorf("past-end total = %d, want 4", page.Total)
 	}
-
-	page2, err := PaginateUsers(users, ListOptions{Cursor: page1.NextCursor})
-	if err != nil {
-		t.Fatalf("page 2: %v", err)
-	}
-	if len(page2.Users) != 1 || page2.Users[0].Username != "zeta" {
-		t.Fatalf("page 2 = %v, want [zeta]", userNames(page2.Users))
-	}
-	if page2.HasMore || page2.NextCursor != "" {
-		t.Fatalf("page 2 metadata wrong: hasMore=%v next=%q", page2.HasMore, page2.NextCursor)
-	}
-}
-
-func TestPaginateUsersInvalidCursor(t *testing.T) {
-	users := []*models.User{{Username: "alpha"}}
-	if _, err := PaginateUsers(users, ListOptions{Cursor: "zzz"}); err != ErrInvalidCursor {
-		t.Errorf("err = %v, want ErrInvalidCursor", err)
-	}
-	if enc, err := EncodeCursor(UserCursor{}); err == nil {
-		if _, err := PaginateUsers(users, ListOptions{Cursor: enc}); err != ErrInvalidCursor {
-			t.Errorf("zero-key cursor: err = %v, want ErrInvalidCursor", err)
-		}
-	}
-}
-
-func userNames(users []*models.User) []string {
-	out := make([]string, 0, len(users))
-	for _, u := range users {
-		out = append(out, u.Username)
-	}
-	return out
 }

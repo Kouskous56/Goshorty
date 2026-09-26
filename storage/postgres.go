@@ -278,6 +278,68 @@ func (s *PostgresStore) GetAllFor(userID, role string) ([]*models.URLData, error
 	return urls, nil
 }
 
+// ListURLs returns a single keyset page (newest first) of active URLs visible
+// to the caller. Unlike GetAllFor this never loads the whole table: the page
+// is fetched with a LIMIT (limit+1 rows to detect whether more remain) and
+// the cursor filters directly in SQL via the (created_at, short_code) key.
+func (s *PostgresStore) ListURLs(userID, role string, cursor models.URLCursor, limit int) (URLListResult, error) {
+	ctx, cancel := databaseContext()
+	defer cancel()
+
+	scopeWhere := "WHERE expires_at > NOW()"
+	scopeArgs := []any{}
+	if role != models.RoleAdmin {
+		scopeArgs = append(scopeArgs, userID)
+		scopeWhere += fmt.Sprintf(" AND created_by = $%d", len(scopeArgs))
+	}
+
+	// The cursor only filters the page; the total counts every visible row,
+	// so the count query keeps only the scope placeholders.
+	pageWhere := scopeWhere
+	pageArgs := append([]any{}, scopeArgs...)
+	if cursor.CreatedAtUnixNano != 0 || cursor.ShortCode != "" {
+		pageArgs = append(pageArgs, time.Unix(0, cursor.CreatedAtUnixNano).UTC(), cursor.ShortCode)
+		n := len(pageArgs)
+		pageWhere += fmt.Sprintf(
+			" AND (created_at < $%d OR (created_at = $%d AND short_code > $%d))",
+			n-1, n-1, n,
+		)
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM urls `+scopeWhere, scopeArgs...).Scan(&total); err != nil {
+		return URLListResult{}, fmt.Errorf("count URLs: %w", err)
+	}
+
+	pageArgs = append(pageArgs, limit+1)
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, short_code, original_url, expires_in, expires_at,
+		       created_at, created_by, visits
+		FROM urls `+pageWhere+fmt.Sprintf(` ORDER BY created_at DESC, short_code ASC LIMIT $%d`, len(pageArgs)), pageArgs...)
+	if err != nil {
+		return URLListResult{}, fmt.Errorf("list URLs: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*models.URLData, 0, limit+1)
+	for rows.Next() {
+		data, err := scanURL(rows)
+		if err != nil {
+			return URLListResult{}, err
+		}
+		items = append(items, data)
+	}
+	if err := rows.Err(); err != nil {
+		return URLListResult{}, fmt.Errorf("iterate URLs: %w", err)
+	}
+
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	return URLListResult{Items: items, Total: total, HasMore: hasMore}, nil
+}
+
 func (s *PostgresStore) StatsFor(userID, role string) (map[string]interface{}, error) {
 	ctx, cancel := databaseContext()
 	defer cancel()
@@ -468,6 +530,58 @@ func (s *PostgresStore) GetAllUsers() ([]*models.User, error) {
 		return nil, fmt.Errorf("iterate users: %w", err)
 	}
 	return users, nil
+}
+
+// ListUsers returns a single keyset page (username ASC) of all users. The
+// page is fetched with LIMIT (limit+1 rows to detect whether more remain) and
+// the cursor filters directly in SQL on the username key.
+func (s *PostgresStore) ListUsers(cursor models.UserCursor, limit int) (UserListResult, error) {
+	ctx, cancel := databaseContext()
+	defer cancel()
+
+	scopeWhere := ""
+	scopeArgs := []any{}
+
+	// The cursor only filters the page; the total counts every user, so the
+	// count query keeps only the (empty) scope placeholders.
+	pageWhere := scopeWhere
+	pageArgs := append([]any{}, scopeArgs...)
+	if cursor.Username != "" {
+		pageArgs = append(pageArgs, cursor.Username)
+		pageWhere = fmt.Sprintf(" WHERE username > $%d", len(pageArgs))
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`+scopeWhere, scopeArgs...).Scan(&total); err != nil {
+		return UserListResult{}, fmt.Errorf("count users: %w", err)
+	}
+
+	pageArgs = append(pageArgs, limit+1)
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, username, password_hash, email, role, created_at, token_version
+		FROM users`+pageWhere+fmt.Sprintf(` ORDER BY username ASC LIMIT $%d`, len(pageArgs)), pageArgs...)
+	if err != nil {
+		return UserListResult{}, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*models.User, 0, limit+1)
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return UserListResult{}, err
+		}
+		items = append(items, user)
+	}
+	if err := rows.Err(); err != nil {
+		return UserListResult{}, fmt.Errorf("iterate users: %w", err)
+	}
+
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	return UserListResult{Items: items, Total: total, HasMore: hasMore}, nil
 }
 
 func (s *PostgresStore) DeleteUser(username string) error {

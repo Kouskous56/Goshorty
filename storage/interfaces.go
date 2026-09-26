@@ -6,6 +6,20 @@ import (
 	"goshorty/models"
 )
 
+// URLListResult is one keyset page of URLs plus list metadata.
+type URLListResult struct {
+	Items   []*models.URLData
+	Total   int
+	HasMore bool
+}
+
+// UserListResult is one keyset page of users plus list metadata.
+type UserListResult struct {
+	Items   []*models.User
+	Total   int
+	HasMore bool
+}
+
 // URLStore defines persistence operations required by URLService.
 type URLStore interface {
 	SetIfAbsent(shortCode string, urlData *models.URLData) error
@@ -13,6 +27,10 @@ type URLStore interface {
 	Delete(shortCode string) error
 	GetAndIncrement(shortCode string) (*models.URLData, error)
 	GetAllFor(userID, role string) ([]*models.URLData, error)
+	// ListURLs returns a single keyset page (newest first) of active URLs
+	// visible to the caller plus list metadata. The cursor is the position
+	// after the previous page; a zero value means the first page.
+	ListURLs(userID, role string, cursor models.URLCursor, limit int) (URLListResult, error)
 	StatsFor(userID, role string) (map[string]interface{}, error)
 }
 
@@ -26,6 +44,10 @@ type UserStore interface {
 	RevokeTokens(userID string) error
 	UpdateUserRole(username, role string) error
 	GetAllUsers() ([]*models.User, error)
+	// ListUsers returns a single keyset page (username ASC) of all users plus
+	// list metadata. The cursor is the position after the previous page; a
+	// zero value means the first page.
+	ListUsers(cursor models.UserCursor, limit int) (UserListResult, error)
 	DeleteUser(username string) error
 }
 

@@ -189,13 +189,44 @@ func (s *URLService) GetAllURLs(userID, role string) ([]*models.URLData, error) 
 }
 
 // ListURLs returns a single page of URLs visible to the caller, newest first,
-// with a keyset cursor for the next page (see PaginateURLs).
+// with a keyset cursor for the next page. The cursor token is opaque; the
+// page slice itself is computed by the storage backend so the whole table is
+// never loaded into memory on the Postgres path.
 func (s *URLService) ListURLs(userID, role string, opts ListOptions) (URLPage, error) {
-	urls, err := s.storage.GetAllFor(userID, role)
+	limit := NormalizeLimit(opts.Limit)
+
+	var cursor models.URLCursor
+	if opts.Cursor != "" {
+		if err := models.DecodeCursor(opts.Cursor, &cursor); err != nil {
+			return URLPage{}, ErrInvalidCursor
+		}
+		if cursor.CreatedAtUnixNano == 0 || cursor.ShortCode == "" {
+			return URLPage{}, ErrInvalidCursor
+		}
+	}
+
+	res, err := s.storage.ListURLs(userID, role, cursor, limit)
 	if err != nil {
 		return URLPage{}, fmt.Errorf("failed to list URLs: %w", err)
 	}
-	return PaginateURLs(urls, opts)
+
+	page := URLPage{
+		URLs:    res.Items,
+		Total:   res.Total,
+		HasMore: res.HasMore,
+	}
+	if res.HasMore && len(res.Items) > 0 {
+		last := res.Items[len(res.Items)-1]
+		enc, err := models.EncodeCursor(models.URLCursor{
+			CreatedAtUnixNano: last.CreatedAt.UnixNano(),
+			ShortCode:         last.ShortCode,
+		})
+		if err != nil {
+			return URLPage{}, fmt.Errorf("encode next cursor: %w", err)
+		}
+		page.NextCursor = enc
+	}
+	return page, nil
 }
 
 // GetStats returns statistics
