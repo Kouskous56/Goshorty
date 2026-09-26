@@ -84,9 +84,11 @@ bash scripts/doctor.sh
 bash scripts/dev.sh
 ```
 
-This starts PostgreSQL 16 through Docker Compose and runs GoShorty with the
-ignored `.env.local`. See [ENVIRONMENTS.md](ENVIRONMENTS.md) for development,
-test, CI, and Railway production configuration.
+The scripts start PostgreSQL and run GoShorty with the ignored `.env.local`.
+They use Docker Compose (PostgreSQL 16) when Docker is available and fall back
+to an embedded PostgreSQL instance (`cmd/localdb`) when it is not. See
+[ENVIRONMENTS.md](ENVIRONMENTS.md) for development, test, CI, and Railway
+production configuration.
 
 1. Navigate to the project directory:
 ```bash

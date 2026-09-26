@@ -56,13 +56,18 @@ else
 	failures=$((failures + 1))
 fi
 
-check "Docker CLI is installed" command -v docker
 if command -v docker >/dev/null 2>&1; then
-	check "Docker engine is running" docker info
-	if [[ -f "$env_path" ]] && docker info >/dev/null 2>&1; then
-		check "compose.yaml and environment values are valid" \
-			docker compose --env-file "$env_path" -f "$project_root/compose.yaml" config --quiet
+	if docker info >/dev/null 2>&1; then
+		echo "[OK]   Docker engine is running"
+		if [[ -f "$env_path" ]]; then
+			check "compose.yaml and environment values are valid" \
+				docker compose --env-file "$env_path" -f "$project_root/compose.yaml" config --quiet
+		fi
+	else
+		echo "[WARN] Docker engine is not running - embedded PostgreSQL (cmd/localdb) will be used" >&2
 	fi
+else
+	echo "[WARN] Docker is not installed - embedded PostgreSQL (cmd/localdb) is used for local development and tests" >&2
 fi
 
 if ((failures > 0)); then

@@ -19,6 +19,27 @@ Starting GoShorty server on :8080
 Base URL: http://goshorty.localhost:8080
 ```
 
+### Persistent Local Database (No Docker)
+
+Without `DATABASE_URL` the app uses in-memory storage, so data resets on
+restart. To run a real, persistent PostgreSQL without Docker, start the embedded
+server (downloads the Postgres binary once on first use):
+
+```bash
+go run ./cmd/localdb
+```
+
+Then, in a second terminal, point the app at it:
+
+```bash
+# PowerShell
+$env:DATABASE_URL="postgres://goshorty:goshorty@127.0.0.1:5433/goshorty?sslmode=disable"
+go run .
+
+# Linux/macOS
+DATABASE_URL="postgres://goshorty:goshorty@127.0.0.1:5433/goshorty?sslmode=disable" go run .
+```
+
 ### 3. Create a Short URL
 
 Using curl:

@@ -131,6 +131,14 @@ export TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/goshorty_t
 go test ./storage -count=1 -v
 ```
 
+Without Docker or a local server, run the same suite against an embedded
+PostgreSQL instance (the platform binary is downloaded from Maven Central on
+first use):
+
+```bash
+EMBEDDED_PG=1 go test ./storage -count=1 -v
+```
+
 Each PostgreSQL test creates and later removes its own random schema. Never point
 `TEST_DATABASE_URL` at a production database.
 
