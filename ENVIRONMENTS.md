@@ -7,7 +7,8 @@ production. Only environment variables and external infrastructure differ.
 
 - Go 1.26.8
 - Git
-- Docker Desktop or Docker Engine with Compose v2
+- Docker Desktop or Docker Engine with Compose v2 (optional — without it, the
+  scripts fall back to an embedded PostgreSQL server)
 - Bash for the portable scripts, or Windows PowerShell 5.1+/PowerShell 7
 - `curl` and `jq` for the E2E suite
 
@@ -65,6 +66,10 @@ bash scripts/dev.sh
 
 Open `http://127.0.0.1:8080`.
 
+`dev.ps1`/`dev.sh` detect Docker automatically: with Docker they start the
+Compose PostgreSQL, without it they start the embedded PostgreSQL server
+(`cmd/localdb`, persistent data under `.localdb/`) and point `DATABASE_URL` at it.
+
 Default local admin credentials:
 
 ```text
@@ -95,6 +100,23 @@ docker compose --env-file .env.local down
 `docker compose down -v` deliberately; this is destructive and is not included
 in any project script.
 
+### Embedded PostgreSQL (no Docker)
+
+When Docker is unavailable, `cmd/localdb` runs a real PostgreSQL server as a
+child process. The platform binary is downloaded once from Maven Central into
+the user cache (`~/.embedded-postgres-go`); database files persist under
+`.localdb/data` (git-ignored) so restarts keep the data.
+
+```bash
+go run ./cmd/localdb
+```
+
+Flags: `-port` (default `5433`, override with `LOCALDB_PORT`), `-data`
+(default `.localdb/data`), `-user`/`-password`/`-database` (default
+`goshorty`/`goshorty`/`goshorty`). It prints the ready `DATABASE_URL`; press
+Ctrl+C to stop. `scripts/dev.ps1` / `scripts/dev.sh` run it automatically when
+no Docker engine is detected.
+
 ## Test environment
 
 `.env.test.example` contains deterministic, non-production test values. CI has
@@ -114,6 +136,10 @@ bash scripts/test-local.sh
 
 PostgreSQL tests create random schemas and remove them afterward. Even so,
 `TEST_DATABASE_URL` must never point to production.
+
+When Docker is unavailable, `test-local.ps1`/`test-local.sh` set `EMBEDDED_PG=1`
+instead and the storage suite runs against an embedded PostgreSQL instance
+(see `INTEGRATION_TESTING.md`).
 
 ## CI environment
 

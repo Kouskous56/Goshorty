@@ -1,11 +1,11 @@
-.PHONY: help setup doctor db-up db-down db-logs stack-up stack-down backup build run dev test test-local smoke coverage race integration e2e fmt-check vet vuln ci clean install-deps tidy
+.PHONY: help setup doctor db-up db-down db-logs stack-up stack-down backup build run dev localdb test test-local smoke coverage race integration e2e fmt-check vet vuln ci clean install-deps tidy
 
 help:
 	@echo "GoShorty - URL Shortener with TTL"
 	@echo ""
 	@echo "Available commands:"
 	@echo "  make setup          - Create an ignored .env.local with a random secret"
-	@echo "  make doctor         - Validate Go, Docker, Compose, and local env"
+	@echo "  make doctor         - Validate Go and local env (Docker optional)"
 	@echo "  make db-up          - Start local PostgreSQL 16"
 	@echo "  make db-down        - Stop local PostgreSQL without deleting data"
 	@echo "  make db-logs        - Follow local PostgreSQL logs"
@@ -16,8 +16,9 @@ help:
 	@echo "  make build          - Build the executable"
 	@echo "  make run            - Run the server"
 	@echo "  make dev            - Run in development mode (go run)"
+	@echo "  make localdb        - Run embedded PostgreSQL (no Docker needed)"
 	@echo "  make test           - Run tests"
-	@echo "  make test-local     - Run tests against local PostgreSQL"
+	@echo "  make test-local     - Run tests against local PostgreSQL (Docker or embedded)"
 	@echo "  make smoke          - Verify health, metrics, request ID, and JSON logs"
 	@echo "  make coverage       - Run tests and enforce the coverage floor"
 	@echo "  make race           - Run Linux/CGO race detector"
@@ -62,6 +63,9 @@ run: build
 
 dev:
 	bash scripts/dev.sh
+
+localdb:
+	go run ./cmd/localdb
 
 test:
 	go test ./... -count=1

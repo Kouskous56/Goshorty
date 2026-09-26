@@ -48,14 +48,21 @@ if (Test-Path -LiteralPath $envPath) {
 }
 
 $docker = Get-Command docker -ErrorAction SilentlyContinue
-Report-Check ($null -ne $docker) "Docker CLI is installed"
 if ($docker) {
     & $docker.Path info *> $null
-    Report-Check ($LASTEXITCODE -eq 0) "Docker engine is running"
-    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $envPath)) {
-        & $docker.Path compose --env-file $envPath -f (Join-Path $projectRoot "compose.yaml") config --quiet
-        Report-Check ($LASTEXITCODE -eq 0) "compose.yaml and environment values are valid"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK]   Docker engine is running"
+        if (Test-Path -LiteralPath $envPath) {
+            & $docker.Path compose --env-file $envPath -f (Join-Path $projectRoot "compose.yaml") config --quiet
+            Report-Check ($LASTEXITCODE -eq 0) "compose.yaml and environment values are valid"
+        }
     }
+    else {
+        Write-Host "[WARN] Docker engine is not running - embedded PostgreSQL (cmd/localdb) will be used." -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Host "[WARN] Docker is not installed - embedded PostgreSQL (cmd/localdb) is used for local development and tests." -ForegroundColor Yellow
 }
 
 if ($failures.Count -gt 0) {
