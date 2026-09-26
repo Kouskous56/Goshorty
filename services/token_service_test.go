@@ -35,7 +35,22 @@ func TestTokenRoundTripAndTamperResistance(t *testing.T) {
 	}
 
 	parts := strings.Split(token, ".")
-	tampered := parts[0] + "." + parts[1][:len(parts[1])-1] + "x"
+	if len(parts) != 2 {
+		t.Fatal("generated token should be payload.signature")
+	}
+	// Mutate a payload character in the middle of the base64 string, where all
+	// six bits are significant. Mutating only the final character of the
+	// signature is a broken tamper: the trailing two bits of that character are
+	// padding that the decoder drops, so swapping w/x/y/z (which share the same
+	// four payload bits) can leave the decoded signature byte-for-byte
+	// identical and the "tampered" token still verifies.
+	payload := parts[0]
+	pos := len(payload) / 2
+	mutated := payload[:pos] + "A" + payload[pos+1:]
+	if mutated == payload {
+		mutated = payload[:pos] + "B" + payload[pos+1:]
+	}
+	tampered := mutated + "." + parts[1]
 	if _, err := service.VerifyToken(tampered); err == nil {
 		t.Fatal("expected tampered token to fail")
 	}
