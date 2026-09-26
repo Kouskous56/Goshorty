@@ -16,7 +16,7 @@ trusted. PostgreSQL and Railway variables are privileged infrastructure.
 | Stale admin privilege | role reloaded on every request | Audit role changes in platform logs |
 | Last-admin removal | storage and transaction invariant | Maintain a documented recovery owner |
 | Short-code race | atomic memory reservation/PostgreSQL unique constraint | Monitor conflict rate |
-| Cross-user data access | owner-scoped queries and admin checks | Keep authorization regression tests |
+| Cross-user data access | owner-scoped queries and admin checks; service + API regression tests (opaque 404 for foreign GET/DELETE, owner/admin bypass, public TTL-only redirect) | Re-run authorization tests on handler/storage changes |
 | Host/proxy spoofing | validated `PUBLIC_BASE_URL`, trusted proxy allowlist | Review Railway proxy range changes |
 | Browser injection | strict CSP (`script-src 'self'`, no inline code), nosniff, frame denial, CORS allowlist | Keep the SPA free of inline scripts/handlers (regression-tested) |
 | Oversized/slow requests | body cap and HTTP server timeouts | Apply upstream edge limits too |
